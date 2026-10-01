@@ -3,7 +3,22 @@
 Author: **Anthony Carter and Susan (ChatGPT)**  
 Target: **Blender 5.0.1 / Rigify**
 
-The ZIP has one top-level folder: `gameready_rig_types_feature_set`.
+Ok this is my best attempt to explain/document this here.
+
+###  What is this, and what does this do?
+The primary purpose of this rigify feature set (an 'addon' for rigify)  is to make available 'rig_types' that are compatible with unity (and possibly other game engines).
+For example, there should be no instances of 'stretch-to' constraints on deformer bones*.   The 'heirarchy' of the skeleton on export to fbx, should only exclusively include other deform bones**.
+
+In order to keep general rigify functionality, that has required some switching around of things and some fun stuff may have been lost (although i am not currently aware of anything specifically, this is just a warning)  -since the primary goal here is for a working rig in unity.. and complete parity between blender visualization and unity final animation i choose that over 'ease of use' for the animator. (in mind of myself, sorry if you are reading this and you are not me - but thems the breaks).
+
+Finally, there may be 'conveniences' added -such as..  i have stolen the idea from cloudrig, because it seemed very nice.. To have the ability to preview how the 'rig_type' will generate whilst manipulating the meta-rig. So, you can see where all the 'animation gizmos' will land on your skeleton before generation and you have the option to adjust these with offsets... This makes generation less of a 'guessing game' and allows you to set more up whilst generating.
+
+Ideally, in my mind, this adds missing nicities that should allow to keep the metarig around and regenerate your rig and tweak it as you go... As i find more things missing that i require (currently there is no way to maintain linkage to shape keys and drivers or something like that.. which would be nice )   --if i can develop this features into this i may do so.
+
+
+*Stretch-to constraints introduces non-uniform scaling, which is inherited down a bone chain and has a 'knock-on effect' on the child bones.. Therefore, animations appear differently in unity than they do in a game engine. (volume correction on the constraint compounds this issue).
+
+** 'other bones' such as  mechanism/org bones are not wanted in unity, the root being the obvious exception... When you export to FBX with 'Deform only' turned on, if you have these bones sitting inbetween other deform bones they come along for the ride.  When these extra bones are 'missing' from the heirarchy (especially if they have kind of offset) i have seen instances of the visual parity breaking between blender and unity. This is being avoid by avoiding them entirely. (This issue itself is really the primary reason for this feature_set - a new field is introduced in all rig types that allows you to explictly set what bone the deform bone will be parented to.)
 
 ## Rig types
 
