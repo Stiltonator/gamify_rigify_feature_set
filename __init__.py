@@ -2,7 +2,7 @@ rigify_info = {
     "name": "Gamify - Game Ready Rig Types",
     "description": "GameReady Rigify arm, spine, finger, super-copy and leg types.",
     "author": "Anthony Carter and Susan (ChatGPT)",
-    "version": (0, 0, 401),
+    "version": (0, 0, 402),
     "blender": (5, 0, 0),
 }
 

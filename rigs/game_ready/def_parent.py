@@ -18,10 +18,10 @@ class DefParentMixin:
         super().initialize()
         self.gr_override_parent = getattr(self.params, self.parent_override_param)
         self.gr_parent_name = getattr(self.params, self.parent_name_param).strip()
-        #if self.gr_override_parent and not self.gr_parent_name:
+        
+        #  Commented these out so we dont force 'DEF' name
+        #if self.gr_override_parent and not self.gr_parent_name and not self.allow_empty_chain_parent:
         #    self.raise_error("Enter an exact generated DEF bone name, or disable Override Chain Parent.")
-        if self.gr_override_parent and not self.gr_parent_name and not self.allow_empty_chain_parent:
-            self.raise_error("Enter an exact generated DEF bone name, or disable Override Chain Parent.")
         
         if hasattr(self, 'bbone_segments'):
             self.bbone_segments = 1
@@ -36,34 +36,66 @@ class DefParentMixin:
         source = self.get_bone_parent(orgs[0])
         root = self.generator.root_bone
 
+        edit_bones = self.obj.data.edit_bones
+
         # if self.gr_override_parent:
-        #     parent = self.gr_parent_name
+        #     if not self.gr_parent_name or self.gr_parent_name.casefold() == self.none_parent_token.casefold():
+        #         parent = None
+        #     else:
+        #         parent = self.gr_parent_name
+        # elif self.default_parent_to_root:
+        #     parent = root
         # elif source and source != root:
         #     parent = source if source.startswith('DEF-') else make_derived_name(source, 'def')
         # else:
         #     parent = None
+
+        #
+        # New code for overriding parent
+        #
+        warning_operator = self.obj  # Placeholder is not used for reporting.
+
         if self.gr_override_parent:
-            if not self.gr_parent_name or self.gr_parent_name.casefold() == self.none_parent_token.casefold():
+            requested_parent = self.gr_parent_name
+
+            if not requested_parent:
+                self.report_warning(
+                    "Chain Parent field is empty. The DEF bone will have no parent. "
+                    "Enter 'NONE' to suppress this warning."
+                )
                 parent = None
+
+            elif requested_parent.casefold() == self.none_parent_token.casefold():
+                parent = None
+
+            elif requested_parent not in edit_bones:
+                self.report_warning(
+                    "Parent '{}' not found. The DEF bone will have no parent.",
+                    requested_parent
+                )
+                parent = None
+
             else:
-                parent = self.gr_parent_name
-        elif self.default_parent_to_root:
-            parent = root
+                parent = requested_parent
+
         elif source and source != root:
             parent = source if source.startswith('DEF-') else make_derived_name(source, 'def')
         else:
-            parent = None
+            parent = root
 
-        edit_bones = self.obj.data.edit_bones
+
+        
+        ## edit bones moved from here
+
         if parent:
             if parent not in edit_bones:
                 self.raise_error("DEF chain parent '{}' was not found. Enter the exact generated DEF bone name.", parent)
             # if not parent.startswith('DEF-'):
             #     self.raise_error("Chain Parent '{}' must be a DEF bone; GameReady DEF bones cannot parent to ORG, MCH, control or root bones.", parent)
-            if not parent.startswith('DEF-') and not (
-                self.allow_root_def_parent and parent == root
-            ):
-                self.raise_error("Chain Parent '{}' must be a DEF bone or an explicitly allowed rig root.", parent)
+            # if not parent.startswith('DEF-') and not (
+            #     self.allow_root_def_parent and parent == root
+            # ):
+            #     self.raise_error("Chain Parent '{}' must be a DEF bone or an explicitly allowed rig root.", parent)
 
             owned = set(orgs)
             owned.update(getattr(self.bones, 'deform', []))
@@ -71,7 +103,12 @@ class DefParentMixin:
             seen = set()
             while ancestor:
                 if ancestor.name in owned or ancestor.name in seen:
-                    self.raise_error("Chain Parent cannot be this rig's own bone or one of its descendants.")
+                    self.raise_error(
+                        "Chain Parent cannot be this rig's own bone or one of its descendants."
+                        "Chain Parent '{}' reaches this rig's bone '{}'.",
+                        parent,
+                        ancestor.name
+                    )
                 seen.add(ancestor.name)
                 ancestor = ancestor.parent
 
@@ -99,25 +136,61 @@ class DefParentMixin:
         if finalize:
             finalize()
 
+#         edit_bones = self.obj.data.bones
+#         deform = getattr(self.bones, 'deform', [])
+#         for name in deform:
+#             bone = edit_bones[name]
+#             parent = bone.parent
+# #            if parent and (not parent.name.startswith('DEF-') or not parent.use_deform):
+# #                self.raise_error("DEF hierarchy violation: '{}' has non-DEF parent '{}'.", name, parent.name)
+#             if parent and (not parent.name.startswith('DEF-') or not parent.use_deform):
+#                 is_allowed_root_parent = (
+#                     self.allow_root_def_parent
+#                     and name == deform[0]
+#                     and parent.name == self.generator.root_bone
+#                 )
+#                 if not is_allowed_root_parent:
+#                     self.raise_error("DEF hierarchy violation: '{}' has non-DEF parent '{}'.", name, parent.name)
+#             if bone.bbone_segments != 1:
+#                 self.raise_error("DEF bone '{}' must use one B-Bone segment.", name)
+#             if any(con.type == 'STRETCH_TO' for con in self.obj.pose.bones[name].constraints):
+#                 self.raise_error("DEF bone '{}' must not have a Stretch-To constraint.", name)
+        
         edit_bones = self.obj.data.bones
         deform = getattr(self.bones, 'deform', [])
-        for name in deform:
+
+        for index, name in enumerate(deform):
             bone = edit_bones[name]
             parent = bone.parent
-#            if parent and (not parent.name.startswith('DEF-') or not parent.use_deform):
-#                self.raise_error("DEF hierarchy violation: '{}' has non-DEF parent '{}'.", name, parent.name)
-            if parent and (not parent.name.startswith('DEF-') or not parent.use_deform):
+
+            if parent:
+                is_first_deform = index == 0
+                is_override_parent = is_first_deform and self.gr_override_parent
                 is_allowed_root_parent = (
-                    self.allow_root_def_parent
-                    and name == deform[0]
+                    is_first_deform
+                    and not self.gr_override_parent
                     and parent.name == self.generator.root_bone
                 )
-                if not is_allowed_root_parent:
-                    self.raise_error("DEF hierarchy violation: '{}' has non-DEF parent '{}'.", name, parent.name)
+
+                if not is_override_parent and not is_allowed_root_parent:
+                    if not parent.name.startswith('DEF-') or not parent.use_deform:
+                        self.raise_error(
+                            "DEF hierarchy violation: '{}' has invalid parent '{}'.",
+                            name,
+                            parent.name
+                        )
+
             if bone.bbone_segments != 1:
                 self.raise_error("DEF bone '{}' must use one B-Bone segment.", name)
-            if any(con.type == 'STRETCH_TO' for con in self.obj.pose.bones[name].constraints):
-                self.raise_error("DEF bone '{}' must not have a Stretch-To constraint.", name)
+
+            if any(
+                con.type == 'STRETCH_TO'
+                for con in self.obj.pose.bones[name].constraints
+            ):
+                self.raise_error(
+                    "DEF bone '{}' must not have a Stretch-To constraint.",
+                    name
+                )
 
     @classmethod
     def add_parent_parameters(cls, params, prefix):
