@@ -1,4 +1,4 @@
-# Gamify - Game Ready Rig Types — 0.402
+# Gamify - Game Ready Rig Types — 0.403
 
 Author: **Anthony Carter and Susan (ChatGPT)**  
 Target: **Blender 5.0.1 / Rigify**
