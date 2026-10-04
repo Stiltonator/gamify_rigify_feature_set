@@ -7,77 +7,16 @@ This adapter customizes parenting, rotation following and rigid DEF segments.
 from bpy.props import BoolProperty, StringProperty
 from rigify.base_rig import stage
 from rigify.rigs.limbs.leg import Rig as NativeLegRig, create_sample as native_create_sample
-from rigify.utils.naming import make_derived_name
-from rigify.utils import strip_org
 from rigify.utils.layers import ControlLayersOption
 
+from .def_parent import DefParentMixin
 
-class Rig(NativeLegRig):
+
+class Rig(DefParentMixin, NativeLegRig):
     """Full-featured GameReady leg with toes, built on Rigify's limbs.leg."""
 
-    def initialize(self):
-        super().initialize()
-        # Ignore any saved native B-Bone setting without changing the shared
-        # parameter definition used by other Rigify rig types.
-        self.bbone_segments = 1
-        self.gr_override_parent = self.params.gr_toes_override_parent
-        self.gr_parent_name = self.params.gr_toes_parent.strip()
-
-    def parent_bones(self):
-        # Resolve after all components have generated their bones, so Start can
-        # target any existing bone in the generated armature.
-        super().parent_bones()
-        source_parent = self.rig_parent_bone
-        edit_bones = self.obj.data.edit_bones
-        source_bone = strip_org(self.bones.org.main[0])
-
-        if self.gr_override_parent:
-            requested_parent = self.gr_parent_name
-            if not requested_parent:
-                self.report_warning(
-                    "{} Start Parent field was left Empty. Enter NONE to suppress this.",
-                    source_bone,
-                )
-                parent = None
-            elif requested_parent.casefold() == 'none':
-                parent = None
-            else:
-                parent = requested_parent
-        elif source_parent and source_parent != self.generator.root_bone:
-            parent = (
-                source_parent if source_parent.startswith('DEF-')
-                else make_derived_name(source_parent, 'def')
-            )
-        else:
-            parent = None
-
-        if parent:
-            if parent not in edit_bones:
-                self.raise_error(
-                    "{} invalid parent (Invalid name or Cyclic dependancy detected)",
-                    source_bone,
-                )
-
-            owned = set(self.bones.flatten())
-            ancestor = edit_bones[parent]
-            seen = set()
-            while ancestor:
-                if ancestor.name in owned or ancestor.name in seen:
-                    self.raise_error(
-                        "{} invalid parent (Invalid name or Cyclic dependancy detected)",
-                        source_bone,
-                    )
-                seen.add(ancestor.name)
-                ancestor = ancestor.parent
-
-        self.gr_def_parent = parent
-        # With the override enabled, None deliberately leaves the MCH thigh
-        # parent and the DEF start unparented. Without it, native controls with
-        # no metarig parent continue to use the rig root as their parent.
-        self.rig_parent_bone = (
-            parent if self.gr_override_parent
-            else parent or self.generator.root_bone
-        )
+    parent_override_param = 'gr_toes_override_parent'
+    parent_name_param = 'gr_toes_parent'
 
     def build_ik_parent_switch(self, pbuilder):
         # The established hierarchy fixes these controls under root, so do not
@@ -125,8 +64,10 @@ class Rig(NativeLegRig):
 
     @stage.parent_bones
     def parent_deform_chain(self):
-        self.set_bone_parent(self.bones.deform[0], self.gr_def_parent)
-        self.parent_bone_chain(self.bones.deform, use_connect=True)
+        # First let DefParentMixin resolve the start parent and establish the
+        # standard DEF chain. Then restore this leg type's special hierarchy.
+        super().parent_deform_chain()
+
         # Extra thigh/shin segments are unconnected; their parent bones are
         # reassigned to the matching start DEF bones just below.
         for name, entry in zip(self.bones.deform, self.segment_table_full):
@@ -161,10 +102,6 @@ class Rig(NativeLegRig):
         # The first shin segment may end above the ankle. Keep the foot's
         # rest position rather than snapping it to that segment's tail.
         self.set_bone_parent(self.gr_foot_def, self.gr_first_shin_def, use_connect=False)
-        if self.gr_def_parent is None:
-            # A skeleton root can have no parent, but must not acquire Rigify's
-            # non-deforming control root during its auto-parenting pass.
-            self.generator.disable_auto_parent(self.bones.deform[0])
         for name in self.bones.deform:
             self.get_bone(name).use_inherit_rotation = True
 
