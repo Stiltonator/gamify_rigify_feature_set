@@ -1,6 +1,6 @@
 """GameReady spine adapter based on Rigify's splines.basic_spine."""
 
-from bpy.props import FloatVectorProperty
+from bpy.props import BoolProperty, FloatVectorProperty
 
 from rigify.base_rig import stage
 from rigify.rigs.spines.basic_spine import Rig as NativeBasicSpineRig
@@ -53,6 +53,17 @@ class Rig(DefParentMixin, NativeBasicSpineRig):
             params.gr_spine_tweak_widget_offset,
             params.gr_spine_tweak_widget_scale,
         )
+
+        all_controls = [ctrl.master, ctrl.hips, ctrl.chest]
+        if self.params.make_fk_controls:
+            all_controls.extend(ctrl.fk.hips + ctrl.fk.chest)
+        all_controls.extend(ctrl.tweak)
+
+        for name in all_controls:
+            self.obj.pose.bones[name].lock_scale = (True, True, True)
+
+        for name in (ctrl.hips, ctrl.chest):
+            self.obj.pose.bones[name].lock_location = (True, True, True)
 
     def set_custom_shape_visuals(self, bone_names, offset, scale, rotation=None):
         for name in bone_names:
@@ -120,40 +131,76 @@ class Rig(DefParentMixin, NativeBasicSpineRig):
             update=tag_view3d_redraw,
             description='Custom shape scale for the tweak controls')
 
+        params.gr_spine_torso_visuals_expanded = BoolProperty(
+            name='Torso Control Expanded', default=False, options={'HIDDEN'},
+            description='Expand or collapse torso control visual settings')
+        params.gr_spine_hips_visuals_expanded = BoolProperty(
+            name='Hip Control Expanded', default=False, options={'HIDDEN'},
+            description='Expand or collapse hip control visual settings')
+        params.gr_spine_chest_visuals_expanded = BoolProperty(
+            name='Chest Control Expanded', default=False, options={'HIDDEN'},
+            description='Expand or collapse chest control visual settings')
+        params.gr_spine_fk_visuals_expanded = BoolProperty(
+            name='FK Controls Expanded', default=False, options={'HIDDEN'},
+            description='Expand or collapse FK control visual settings')
+        params.gr_spine_tweak_visuals_expanded = BoolProperty(
+            name='Tweak Controls Expanded', default=False, options={'HIDDEN'},
+            description='Expand or collapse tweak control visual settings')
+
     @classmethod
     def parameters_ui(cls, layout, params):
         layout.label(text='GameReady Spine — based on splines.basic_spine')
-        super().parameters_ui(layout, params)
         cls.draw_parent_parameters(layout, params, 'gr_spine')
+        super().parameters_ui(layout, params)
 
         layout.separator()
         layout.label(text='Custom Shape Visuals')
 
-        torso_box = layout.box()
-        torso_box.label(text='Torso Control')
-        torso_box.prop(params, 'gr_spine_torso_widget_offset')
-        torso_box.prop(params, 'gr_spine_torso_widget_rotation')
-        torso_box.prop(params, 'gr_spine_torso_widget_scale')
+        torso_open = params.gr_spine_torso_visuals_expanded
+        layout.prop(
+            params, 'gr_spine_torso_visuals_expanded', text='Torso Control',
+            icon='TRIA_DOWN' if torso_open else 'TRIA_RIGHT', emboss=False)
+        if torso_open:
+            torso_box = layout.box()
+            torso_box.prop(params, 'gr_spine_torso_widget_offset')
+            torso_box.prop(params, 'gr_spine_torso_widget_rotation')
+            torso_box.prop(params, 'gr_spine_torso_widget_scale')
 
-        hips_box = layout.box()
-        hips_box.label(text='Hip Control')
-        hips_box.prop(params, 'gr_spine_hips_widget_offset')
-        hips_box.prop(params, 'gr_spine_hips_widget_rotation')
-        hips_box.prop(params, 'gr_spine_hips_widget_scale')
+        hips_open = params.gr_spine_hips_visuals_expanded
+        layout.prop(
+            params, 'gr_spine_hips_visuals_expanded', text='Hip Control',
+            icon='TRIA_DOWN' if hips_open else 'TRIA_RIGHT', emboss=False)
+        if hips_open:
+            hips_box = layout.box()
+            hips_box.prop(params, 'gr_spine_hips_widget_offset')
+            hips_box.prop(params, 'gr_spine_hips_widget_rotation')
+            hips_box.prop(params, 'gr_spine_hips_widget_scale')
 
-        chest_box = layout.box()
-        chest_box.label(text='Chest Control')
-        chest_box.prop(params, 'gr_spine_chest_widget_offset')
-        chest_box.prop(params, 'gr_spine_chest_widget_rotation')
-        chest_box.prop(params, 'gr_spine_chest_widget_scale')
+        chest_open = params.gr_spine_chest_visuals_expanded
+        layout.prop(
+            params, 'gr_spine_chest_visuals_expanded', text='Chest Control',
+            icon='TRIA_DOWN' if chest_open else 'TRIA_RIGHT', emboss=False)
+        if chest_open:
+            chest_box = layout.box()
+            chest_box.prop(params, 'gr_spine_chest_widget_offset')
+            chest_box.prop(params, 'gr_spine_chest_widget_rotation')
+            chest_box.prop(params, 'gr_spine_chest_widget_scale')
 
-        fk_box = layout.box()
-        fk_box.label(text='FK Controls')
-        fk_box.enabled = params.make_fk_controls
-        fk_box.prop(params, 'gr_spine_fk_widget_offset')
-        fk_box.prop(params, 'gr_spine_fk_widget_scale')
+        fk_open = params.gr_spine_fk_visuals_expanded
+        layout.prop(
+            params, 'gr_spine_fk_visuals_expanded', text='FK Controls',
+            icon='TRIA_DOWN' if fk_open else 'TRIA_RIGHT', emboss=False)
+        if fk_open:
+            fk_box = layout.box()
+            fk_box.enabled = params.make_fk_controls
+            fk_box.prop(params, 'gr_spine_fk_widget_offset')
+            fk_box.prop(params, 'gr_spine_fk_widget_scale')
 
-        tweak_box = layout.box()
-        tweak_box.label(text='Tweak Controls')
-        tweak_box.prop(params, 'gr_spine_tweak_widget_offset')
-        tweak_box.prop(params, 'gr_spine_tweak_widget_scale')
+        tweak_open = params.gr_spine_tweak_visuals_expanded
+        layout.prop(
+            params, 'gr_spine_tweak_visuals_expanded', text='Tweak Controls',
+            icon='TRIA_DOWN' if tweak_open else 'TRIA_RIGHT', emboss=False)
+        if tweak_open:
+            tweak_box = layout.box()
+            tweak_box.prop(params, 'gr_spine_tweak_widget_offset')
+            tweak_box.prop(params, 'gr_spine_tweak_widget_scale')

@@ -19,7 +19,7 @@ PREVIEW_CONFIGS = {
         'scale': 'gr_sc_widget_scale',
         'enabled': ('make_control', 'make_widget'),
     },
-    'game_ready.spine': {
+    'game_ready.spine_unity_humanoid': {
         'groups': (
             {
                 'widget': 'cube', 'offset': 'gr_spine_torso_widget_offset',

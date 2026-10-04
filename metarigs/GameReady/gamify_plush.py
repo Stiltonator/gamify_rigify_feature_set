@@ -208,7 +208,7 @@ def create(obj):  # noqa
 
     bpy.ops.object.mode_set(mode='OBJECT')
     pbone = obj.pose.bones[bones['Hip']]
-    pbone.rigify_type = 'game_ready.spine'
+    pbone.rigify_type = 'game_ready.spine_unity_humanoid'
     pbone.lock_location = (False, False, False)
     pbone.lock_rotation = (False, False, False)
     pbone.lock_rotation_w = False
@@ -216,7 +216,7 @@ def create(obj):  # noqa
     pbone.rotation_mode = 'QUATERNION'
     assign_bone_collections(pbone, 'Torso')
     try:
-        pbone.rigify_parameters.gr_spine_override_parent = True
+        pbone.rigify_parameters.gr_spine_override_parent = False
     except AttributeError:
         pass
     try:

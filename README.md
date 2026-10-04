@@ -27,7 +27,7 @@ Ideally, in my mind, this adds missing nicities that should allow to keep the me
 | `game_ready.leg_basic_no_toes` | GameReady implementation | Existing three-bone FK/IK leg. |
 | `game_ready.leg_toes` | `limbs.leg` | Full native leg controls, toes, foot roll, switching and pose matching with the established DEF hierarchy. |
 | `game_ready.arm` | `limbs.arm` | Native arm controls, FK/IK, wrist pivot option and pose matching. |
-| `game_ready.spine` | `spines.basic_spine` | Native basic spine controls and tweak chain. |
+| `game_ready.spine_unity_humanoid` | `spines.basic_spine` | Spine for unity humanoid retargetting (No Translation / Stretching) |
 | `game_ready.finger` | `limbs.super_finger` | Native FK finger, optional IK control and matching tools. |
 | `game_ready.super_copy` | `basic.super_copy` | Native single-bone copy rig, with configurable DEF parent and widget transforms. |
 
