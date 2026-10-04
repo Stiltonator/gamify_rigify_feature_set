@@ -26,6 +26,8 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
         self.gr_source_parent = self.get_bone_parent(self._single_bone_name(self.bones.org))
         self.gr_def_parent = None
         self._gr_def_parent_resolved = False
+        self.gr_control_parent = None
+        self._gr_control_parent_resolved = False
 
     @staticmethod
     def _single_bone_name(bones):
@@ -101,6 +103,93 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
         if self.gr_def_parent is None:
             self.generator.disable_auto_parent(deform_name)
 
+    def _resolve_control_parent(self):
+        if self._gr_control_parent_resolved or not self.make_control:
+            return
+
+        edit_bones = self.obj.data.edit_bones
+        control_name = self._single_bone_name(self.bones.ctrl)
+        org_name = self._single_bone_name(self.bones.org)
+        metarig_name = strip_org(org_name)
+        root = self.generator.root_bone
+
+        if self.params.gr_sc_control_override_parent:
+            requested = self.params.gr_sc_control_parent.strip()
+            if not requested:
+                warnings.warn(
+                    f"{metarig_name} Control Parent field is empty. "
+                    "The control bone will have no parent. Enter 'NONE' to suppress this warning.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                parent = None
+            elif requested.casefold() == self.none_parent_token.casefold():
+                parent = None
+            elif requested not in edit_bones:
+                warnings.warn(
+                    f"{metarig_name} Control Parent '{requested}' was not found. "
+                    "The control bone will have no parent.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                parent = None
+            else:
+                parent = requested
+        else:
+            # Prefer the generated DEF counterpart of the metarig parent. If it
+            # does not exist, retain the parent chosen by basic.super_copy.
+            native_parent = edit_bones[control_name].parent
+            parent = native_parent.name if native_parent else None
+            source = self.gr_source_parent
+            if source and source != root:
+                def_parent = source if source.startswith('DEF-') else make_deformer_name(strip_org(source))
+                if def_parent in edit_bones:
+                    parent = def_parent
+
+        self.gr_control_parent = parent
+        self._gr_control_parent_resolved = True
+
+    def _validate_control_parent_cycles(self):
+        if not self.make_control:
+            return
+
+        self._resolve_control_parent()
+        control_name = self._single_bone_name(self.bones.ctrl)
+        proposed_parents = {control_name: self.gr_control_parent}
+        if self.make_deform:
+            self._resolve_def_parent()
+            deform_name = self._single_bone_name(self.bones.deform)
+            proposed_parents[deform_name] = self.gr_def_parent
+
+        edit_bones = self.obj.data.edit_bones
+        metarig_name = strip_org(self._single_bone_name(self.bones.org))
+        for child_name, parent_name in proposed_parents.items():
+            seen = set()
+            current_name = parent_name
+            while current_name:
+                if current_name == child_name or current_name in seen:
+                    self.raise_error(
+                        "{} parent overrides would create a cyclic dependency involving '{}'.",
+                        metarig_name,
+                        current_name,
+                    )
+                seen.add(current_name)
+                if current_name in proposed_parents:
+                    current_name = proposed_parents[current_name]
+                else:
+                    current = edit_bones.get(current_name)
+                    current_name = current.parent.name if current and current.parent else None
+
+    def _apply_control_parent(self):
+        if not self.make_control:
+            return
+
+        self._resolve_control_parent()
+        control_name = self._single_bone_name(self.bones.ctrl)
+        self.set_bone_parent(control_name, self.gr_control_parent, use_connect=False)
+        if self.gr_control_parent is None:
+            self.generator.disable_auto_parent(control_name)
+
     def parent_bones(self):
         # Bypass DefParentMixin.parent_bones here: basic.super_copy stores its
         # single ORG and DEF bone names as strings, while the shared resolver is
@@ -108,6 +197,9 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
         super(DefParentMixin, self).parent_bones()
         self._resolve_def_parent()
         self._apply_def_parent()
+        self._resolve_control_parent()
+        self._validate_control_parent_cycles()
+        self._apply_control_parent()
 
     @stage.parent_bones
     def parent_deform_chain(self):
@@ -134,7 +226,11 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
     def rig_bones(self):
         super().rig_bones()
 
-        if self.make_deform and self.make_control:
+        if (
+            self.make_deform
+            and self.make_control
+            and self.params.gr_sc_deform_copy_transform
+        ):
             self.make_constraint(
                 self.bones.deform,
                 'COPY_TRANSFORMS',
@@ -153,6 +249,15 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
         params.gr_sc_def_parent = StringProperty(
             name='Parent', default='',
             description='Name of the generated bone that should parent the DEF bone')
+        params.gr_sc_control_override_parent = BoolProperty(
+            name='Override Parent', default=False,
+            description='Choose a specific parent for the control bone')
+        params.gr_sc_control_parent = StringProperty(
+            name='Parent', default='',
+            description='Name of the generated bone to parent the control bone to; leave blank for no parent with a warning, or enter NONE for no parent silently')
+        params.gr_sc_deform_copy_transform = BoolProperty(
+            name='Deform Copy Transform to Control', default=True,
+            description='Make the deform bone follow the control bone with a Copy Transforms constraint')
         params.gr_sc_widget_offset = FloatVectorProperty(
             name='Widget Offset', size=3, default=(0.0, 0.0, 0.0), subtype='TRANSLATION',
             update=tag_view3d_redraw,
@@ -173,6 +278,11 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
     @classmethod
     def parameters_ui(cls, layout, params):
         layout.prop(params, 'make_control')
+        if params.make_control:
+            control_parent_row = layout.row(align=True)
+            control_parent_row.prop(params, 'gr_sc_control_override_parent')
+            if params.gr_sc_control_override_parent:
+                control_parent_row.prop(params, 'gr_sc_control_parent', text='')
 
         row = layout.split(factor=0.3)
         row.prop(params, 'make_widget')
@@ -205,11 +315,15 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
 
         layout.prop(params, 'make_deform')
         if params.make_deform:
-            layout.prop(params, 'gr_sc_override_parent')
+            parent_row = layout.row(align=True)
+            parent_row.prop(params, 'gr_sc_override_parent')
             if params.gr_sc_override_parent:
-                layout.prop(params, 'gr_sc_def_parent')
+                parent_row.prop(params, 'gr_sc_def_parent', text='')
 
-        cls.add_relink_constraints_ui(layout, params)
+            layout.prop(params, 'gr_sc_deform_copy_transform')
+
+        # Keep Rigify's constraint-relink toggle, but omit its separate Parent field.
+        layout.prop(params, 'relink_constraints')
         if params.relink_constraints and (params.make_control or params.make_deform):
             column = layout.column()
             if params.make_control:
