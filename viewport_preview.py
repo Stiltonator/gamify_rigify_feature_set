@@ -142,6 +142,11 @@ def _active_preview(context):
     if not obj or obj.type != 'ARMATURE' or obj.mode != 'POSE':
         return []
 
+    # These previews describe widgets to be generated from a metarig. The
+    # generated rig also has rig-type metadata, so exclude it explicitly.
+    if not _is_rigify_metarig(context, obj):
+        return []
+
     scene = context.scene
     if scene and getattr(scene, 'gamify_preview_all_gizmos', False):
         bones = (bone for bone in obj.pose.bones if bone.rigify_type)
@@ -162,6 +167,18 @@ def _active_preview(context):
     for bone in bones:
         previews.extend(_previews_for_bone(obj, bone, selected_bone_names, active_bone_name))
     return previews
+
+
+def _is_rigify_metarig(context, obj):
+    """Return whether the active armature is a valid Rigify metarig."""
+    if obj.data.get('rig_id'):
+        return False
+
+    try:
+        from rigify.utils.rig import is_valid_metarig
+        return bool(is_valid_metarig(context))
+    except (ImportError, AttributeError, RuntimeError, TypeError):
+        return False
 
 
 def _connected_pose_chain(obj, root):
@@ -305,7 +322,21 @@ def _draw_preview():
     shader = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
     gpu.state.blend_set('ALPHA')
     draw_in_front = bool(context.scene and context.scene.gamify_gizmos_draw_in_front)
-    gpu.state.depth_test_set('NONE' if draw_in_front else 'LESS_EQUAL')
+    area = getattr(context, 'area', None)
+    spaces = getattr(area, 'spaces', None)
+    space = getattr(spaces, 'active', None)
+    if not space or getattr(space, 'type', None) != 'VIEW_3D':
+        space = getattr(context, 'space_data', None)
+
+    shading = getattr(space, 'shading', None)
+    overlay = getattr(space, 'overlay', None)
+    armature_data = getattr(getattr(context, 'active_object', None), 'data', None)
+    xray_enabled = bool(
+        getattr(shading, 'show_xray', False)
+        or getattr(overlay, 'show_xray_bone', False)
+        or getattr(armature_data, 'show_in_front', False)
+    )
+    gpu.state.depth_test_set('NONE' if draw_in_front or xray_enabled else 'LESS_EQUAL')
     try:
         shader.bind()
         shader.uniform_float('viewportSize', (context.region.width, context.region.height))

@@ -8,6 +8,7 @@ from bpy.props import BoolProperty, StringProperty
 from rigify.base_rig import stage
 from rigify.rigs.limbs.leg import Rig as NativeLegRig, create_sample as native_create_sample
 from rigify.utils.naming import make_derived_name
+from rigify.utils import strip_org
 from rigify.utils.layers import ControlLayersOption
 
 
@@ -21,42 +22,62 @@ class Rig(NativeLegRig):
         self.bbone_segments = 1
         self.gr_override_parent = self.params.gr_toes_override_parent
         self.gr_parent_name = self.params.gr_toes_parent.strip()
-        if self.gr_override_parent and not self.gr_parent_name:
-            self.raise_error("Enter a Chain Parent, or disable Override Chain Parent.")
 
     def parent_bones(self):
-        # This direct callback runs before this rig's decorated parenting methods,
-        # after ALL components have generated their bones. A chosen DEF may belong
-        # to another component, so it must not be resolved in initialize/generate.
+        # Resolve after all components have generated their bones, so Start can
+        # target any existing bone in the generated armature.
         super().parent_bones()
         source_parent = self.rig_parent_bone
         edit_bones = self.obj.data.edit_bones
+        source_bone = strip_org(self.bones.org.main[0])
 
         if self.gr_override_parent:
-            parent = self.gr_parent_name
+            requested_parent = self.gr_parent_name
+            if not requested_parent:
+                self.report_warning(
+                    "{} Start Parent field was left Empty. Enter NONE to suppress this.",
+                    source_bone,
+                )
+                parent = None
+            elif requested_parent.casefold() == 'none':
+                parent = None
+            else:
+                parent = requested_parent
         elif source_parent and source_parent != self.generator.root_bone:
-            parent = source_parent if source_parent.startswith('DEF-') else make_derived_name(source_parent, 'def')
+            parent = (
+                source_parent if source_parent.startswith('DEF-')
+                else make_derived_name(source_parent, 'def')
+            )
         else:
             parent = None
 
         if parent:
             if parent not in edit_bones:
-                self.raise_error("DEF chain parent '{}' was not found. Enable Override Chain Parent and enter an existing generated DEF bone.", parent)
-            if not parent.startswith('DEF-'):
-                self.raise_error("Chain Parent '{}' must be a DEF bone. A leg DEF cannot be parented to a control, ORG or MCH bone.", parent)
+                self.raise_error(
+                    "{} invalid parent (Invalid name or Cyclic dependancy detected)",
+                    source_bone,
+                )
 
             owned = set(self.bones.flatten())
             ancestor = edit_bones[parent]
             seen = set()
             while ancestor:
                 if ancestor.name in owned or ancestor.name in seen:
-                    self.raise_error("Chain Parent cannot be this leg's own bone or a descendant of it.")
+                    self.raise_error(
+                        "{} invalid parent (Invalid name or Cyclic dependancy detected)",
+                        source_bone,
+                    )
                 seen.add(ancestor.name)
                 ancestor = ancestor.parent
 
         self.gr_def_parent = parent
-        # Native master, follow, FK and IK-base parenting all use this field.
-        self.rig_parent_bone = parent or self.generator.root_bone
+        # With the override enabled, None deliberately leaves the MCH thigh
+        # parent and the DEF start unparented. Without it, native controls with
+        # no metarig parent continue to use the rig root as their parent.
+        self.rig_parent_bone = (
+            parent if self.gr_override_parent
+            else parent or self.generator.root_bone
+        )
 
     def build_ik_parent_switch(self, pbuilder):
         # The established hierarchy fixes these controls under root, so do not
@@ -106,19 +127,33 @@ class Rig(NativeLegRig):
     def parent_deform_chain(self):
         self.set_bone_parent(self.bones.deform[0], self.gr_def_parent)
         self.parent_bone_chain(self.bones.deform, use_connect=True)
-        # Extra thigh/shin segments keep their sequential parents, but their
-        # pose sources must be free to move them away from the parent's tail.
+        # Extra thigh/shin segments are unconnected; their parent bones are
+        # reassigned to the matching start DEF bones just below.
         for name, entry in zip(self.bones.deform, self.segment_table_full):
             if entry.org_idx in (0, 1) and entry.seg_idx is not None and entry.seg_idx > 0:
                 self.get_bone(name).use_connect = False
         # Segment-table metadata identifies the shin without relying on names
         # or Blender's suffix allocation. Do not connect: the knee must retain
         # its rest position even though the first thigh segment ends above it.
+        self.gr_first_thigh_def = self.bones.deform[0]
         self.gr_first_shin_def = next(
             name for name, entry in zip(self.bones.deform, self.segment_table_full)
             if entry.org_idx == 1 and entry.seg_idx == 0
         )
-        self.set_bone_parent(self.gr_first_shin_def, self.bones.deform[0], use_connect=False)
+        self.set_bone_parent(self.gr_first_shin_def, self.gr_first_thigh_def, use_connect=False)
+
+        # Parent every additional thigh segment to the first thigh DEF, and
+        # every additional shin segment to the first shin DEF. The foot and
+        # toe DEF hierarchy below remains native apart from the existing foot
+        # attachment to the first shin.
+        for name, entry in zip(self.bones.deform, self.segment_table_full):
+            if entry.seg_idx is None or entry.seg_idx == 0:
+                continue
+            if entry.org_idx == 0:
+                self.set_bone_parent(name, self.gr_first_thigh_def, use_connect=False)
+            elif entry.org_idx == 1:
+                self.set_bone_parent(name, self.gr_first_shin_def, use_connect=False)
+
         self.gr_foot_def = next(
             name for name, entry in zip(self.bones.deform, self.segment_table_full)
             if entry.org_idx == 2
@@ -149,21 +184,33 @@ class Rig(NativeLegRig):
 
     def finalize(self):
         super().finalize()
+        first_deform_name = self.bones.deform[0]
         for name in self.bones.deform:
             bone = self.obj.data.bones[name]
             if bone.bbone_segments != 1:
                 self.raise_error("DEF bone '{}' must have one B-Bone segment.", name)
             if any(con.type == 'STRETCH_TO' for con in self.obj.pose.bones[name].constraints):
                 self.raise_error("DEF bone '{}' must not have a Stretch-To constraint.", name)
-            if bone.parent and (not bone.parent.name.startswith('DEF-') or not bone.parent.use_deform):
+            is_override_start = self.gr_override_parent and name == first_deform_name
+            if bone.parent and not is_override_start and (
+                not bone.parent.name.startswith('DEF-') or not bone.parent.use_deform
+            ):
                 self.raise_error("DEF hierarchy violation: '{}' has non-DEF parent '{}'.", name, bone.parent.name)
-        first = self.obj.data.bones[self.bones.deform[0]]
+        first = self.obj.data.bones[first_deform_name]
         actual_parent = first.parent.name if first.parent else None
         if actual_parent != self.gr_def_parent:
             self.raise_error("The generated DEF chain parent changed unexpectedly: '{}'.", actual_parent)
         shin = self.obj.data.bones[self.gr_first_shin_def]
         if shin.parent != first or shin.use_connect:
             self.raise_error("The first DEF shin must parent to the first DEF thigh without connecting.")
+        for name, entry in zip(self.bones.deform, self.segment_table_full):
+            if entry.seg_idx is None or entry.seg_idx == 0:
+                continue
+            bone = self.obj.data.bones[name]
+            if entry.org_idx == 0 and (bone.parent != first or bone.use_connect):
+                self.raise_error("Additional thigh DEF '{}' must parent to the first DEF thigh without connecting.", name)
+            if entry.org_idx == 1 and (bone.parent != shin or bone.use_connect):
+                self.raise_error("Additional shin DEF '{}' must parent to the first DEF shin without connecting.", name)
         foot = self.obj.data.bones[self.gr_foot_def]
         if foot.parent != shin or foot.use_connect:
             self.raise_error("The DEF foot must parent to the first DEF shin without connecting.")
@@ -177,20 +224,18 @@ class Rig(NativeLegRig):
         super().add_parameters(params)
         params.gr_toes_override_parent = BoolProperty(
             name='Override Chain Parent', default=False,
-            description='Use the named DEF bone for the DEF chain, FK thigh and IK chain start')
+            description='Use the named existing bone for the DEF chain, FK thigh and IK chain start')
         params.gr_toes_parent = StringProperty(
-            name='Chain Parent', default='',
-            description='Exact generated DEF bone name, e.g. DEF-pelvis; controls and IK base also follow it')
+            name='Start', default='',
+            description='Exact target bone name (MCH.thigh_parent and DEF-thigh parented to this).')
 
     @classmethod
     def parameters_ui(cls, layout, params):
         layout.label(text='GameReady Leg — Toes')
         layout.label(text='Thigh / shin / foot / toe, plus heel marker')
         layout.prop(params, 'gr_toes_override_parent')
-        column = layout.column()
-        column.enabled = params.gr_toes_override_parent
-        column.prop(params, 'gr_toes_parent')
-        layout.label(text='DEF parent only; IK foot and pole stay under root.')
+        if params.gr_toes_override_parent:
+            layout.prop(params, 'gr_toes_parent')
         layout.separator()
         # Native leg options, excluding B-Bone Segments. Calling the native
         # panel here would reintroduce that field.
