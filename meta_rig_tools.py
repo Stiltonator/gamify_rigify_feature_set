@@ -56,6 +56,19 @@ class VIEW3D_OT_gamify_regenerate_meta_rig(Operator):
 
         if 'CANCELLED' in result:
             return {'CANCELLED'}
+
+        # Hide the source metarig after a successful generation when its
+        # generated rig is available in this view layer. hide_set is local to
+        # the view layer, so the Toggle Meta/Generated Rig tool can reveal it.
+        generated_rig = getattr(obj.data, 'rigify_target_rig', None)
+        if (
+            generated_rig
+            and generated_rig.type == 'ARMATURE'
+            and generated_rig != obj
+            and context.view_layer.objects.get(generated_rig.name) == generated_rig
+        ):
+            obj.hide_set(True, view_layer=context.view_layer)
+
         return {'FINISHED'}
 
 
