@@ -338,27 +338,13 @@ class Rig(BaseRig):
         root = self.generator.root_bone
         source_parent = self.get_bone_parent(self.org_chain[0])
 
-        if self.params.gr_chain_bendy_override_parent:
-            requested = self.params.gr_chain_bendy_parent.strip()
-            if not requested:
-                self.report_warning(
-                    "Override Parent is enabled but its field is empty; using the rig root."
-                )
-                parent = root
-            elif requested.casefold() == self.none_parent_token.casefold():
-                parent = None
-            elif requested not in edit_bones:
-                self.report_warning(
-                    "Override Parent '{}' was not found; using the rig root.", requested
-                )
-                parent = root
-            else:
-                parent = requested
-        elif source_parent and source_parent != root:
+        # Resolve the ordinary metarig parent first. An invalid override falls
+        # back to this exact behavior, as if Override Parent were disabled.
+        if source_parent and source_parent != root:
             def_parent = make_deformer_name(strip_org(source_parent))
-            parent = def_parent if def_parent in edit_bones else source_parent
+            default_parent = def_parent if def_parent in edit_bones else source_parent
         else:
-            parent = root
+            default_parent = root
 
         owned = set(self.org_chain)
         owned.update(self.bones.ctrl.joints)
@@ -368,11 +354,52 @@ class Rig(BaseRig):
         owned.update(self.bones.ctrl.tweaks)
         owned.update(self.bones.deform)
         owned.add(self.bones.mch.armature_pivot)
-        if parent in owned:
-            self.raise_error(
-                "Override Parent '{}' belongs to this chain and would create a parenting cycle.",
-                parent,
-            )
+
+        parent = default_parent
+        if self.params.gr_chain_bendy_override_parent:
+            requested = self.params.gr_chain_bendy_parent.strip()
+            chain_name = self._label(self.org_chain[0])
+            attempted_target = requested if requested else '<empty>'
+
+            if not requested:
+                self.raise_error(
+                    "Chain '{}' Override Parent target '{}' is empty; "
+                    "re-parenting was not applied.",
+                    chain_name,
+                    attempted_target,
+                )
+            elif requested.casefold() == self.none_parent_token.casefold():
+                # NONE is an intentional no-parent request and suppresses warnings.
+                parent = None
+            elif requested not in edit_bones:
+                self.raise_error(
+                    "Chain '{}' Override Parent target '{}' was not found; "
+                    "re-parenting was not applied.",
+                    chain_name,
+                    attempted_target,
+                )
+            else:
+                # A target that is one of this chain's bones, or is beneath one,
+                # would make the generated parenting graph cyclic.
+                ancestor = edit_bones[requested]
+                seen = set()
+                cyclic = False
+                while ancestor:
+                    if ancestor.name in owned or ancestor.name in seen:
+                        cyclic = True
+                        break
+                    seen.add(ancestor.name)
+                    ancestor = ancestor.parent
+
+                if cyclic:
+                    self.raise_error(
+                        "Chain '{}' Override Parent target '{}' would create a "
+                        "cyclic dependency; re-parenting was not applied.",
+                        chain_name,
+                        attempted_target,
+                    )
+                else:
+                    parent = requested
 
         self.resolved_parent = parent
         self.rig_parent_bone = parent or root
