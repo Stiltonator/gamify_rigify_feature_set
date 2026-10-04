@@ -268,6 +268,7 @@ class Rig(BaseRig):
         sample_names = []
         tweak_names = []
         deform_names = []
+        deform_name_base = make_deformer_name(self._label(self.org_chain[0]))
         sample_specs = self._sample_specs()
         for sample_index, spec in enumerate(sample_specs):
             point, source_index, t, kind = spec
@@ -293,7 +294,7 @@ class Rig(BaseRig):
                 self._bone_length(source_name) * 0.2,
                 roll_axis,
             )
-            def_name = make_deformer_name(strip_org(int_name))
+            def_name = deform_name_base + '.' + str(sample_index).zfill(3)
             def_name = self.copy_bone(int_name, def_name)
             self._place_bone(
                 def_name,
@@ -326,6 +327,10 @@ class Rig(BaseRig):
             else:
                 targets.append(((bbone_drivers[segment_index], 1.0),))
         self._intermediary_targets = targets
+        self._intermediary_curve_targets = [
+            (bbone_drivers[segment_index], t)
+            for _, segment_index, t, _ in sample_specs
+        ]
 
     @stage.parent_bones
     def parent_bendy_chain(self):
@@ -372,17 +377,18 @@ class Rig(BaseRig):
         self.resolved_parent = parent
         self.rig_parent_bone = parent or root
 
-        # Controls attach directly to the selected chain parent. Tangent bones
-        # follow their corresponding controls; drivers and intermediaries are
-        # kept under the MCH pivot; tweak controls follow their corresponding
-        # INT bones, and each DEF sample is a child of its tweak control.
+        # Main controls attach to the selected chain parent. Tangent bones
+        # follow those controls; drivers and INT bones stay under the MCH pivot.
+        # Each tweak is parented to its corresponding INT, while DEF parenting
+        # is either sequential or flat under the selected chain parent.
         for control in self.bones.ctrl.joints:
             self.set_bone_parent(control, parent, use_connect=False)
             self.get_bone(control).inherit_scale = 'NONE'
 
-        for tweak in self.bones.ctrl.tweaks:
-            self.set_bone_parent(tweak, parent, use_connect=False)
-            self.get_bone(tweak).inherit_scale = 'NONE'
+        for tweak, intermediary in zip(
+            self.bones.ctrl.tweaks, self.bones.mch.intermediary
+        ):
+            self.set_bone_parent(tweak, intermediary, use_connect=False)
 
         for tangent, control in zip(self.bones.mch.tangents, self.bones.ctrl.joints):
             self.set_bone_parent(tangent, control, use_connect=False)
@@ -394,13 +400,19 @@ class Rig(BaseRig):
         for name in self.bones.mch.bbone_drivers + self.bones.mch.intermediary:
             self.set_bone_parent(name, pivot, use_connect=False)
 
-        for deform, tweak in zip(self.bones.deform, self.bones.ctrl.tweaks):
-            self.set_bone_parent(deform, tweak, use_connect=False)
+        parent_defs_in_sequence = self.params.gr_chain_bendy_parent_def_sequence
+        for index, deform in enumerate(self.bones.deform):
+            deform_parent = (
+                self.bones.deform[index - 1]
+                if parent_defs_in_sequence and index > 0
+                else parent
+            )
+            self.set_bone_parent(deform, deform_parent, use_connect=False)
+            if deform_parent is None:
+                self.generator.disable_auto_parent(deform)
 
         if parent is None:
             for name in self.bones.ctrl.joints:
-                self.generator.disable_auto_parent(name)
-            for name in self.bones.ctrl.tweaks:
                 self.generator.disable_auto_parent(name)
 
     @stage.configure_bones
@@ -476,8 +488,10 @@ class Rig(BaseRig):
         for tangent, control in zip(self.bones.mch.tangents, self.bones.ctrl.joints):
             self.make_constraint(tangent, 'COPY_TRANSFORMS', control)
 
-        for intermediary, targets in zip(
-            self.bones.mch.intermediary, self._intermediary_targets
+        for intermediary, targets, (driver, head_tail) in zip(
+            self.bones.mch.intermediary,
+            self._intermediary_targets,
+            self._intermediary_curve_targets,
         ):
             pose_bone = self.obj.pose.bones[intermediary]
             constraint = pose_bone.constraints.new('ARMATURE')
@@ -489,14 +503,20 @@ class Rig(BaseRig):
                 target.subtarget = target_name
                 target.weight = weight
 
+            curve_location = self.make_constraint(
+                intermediary,
+                'COPY_LOCATION',
+                driver,
+                head_tail=head_tail,
+                use_bbone_shape=True,
+            )
+            curve_location.name = 'Follow B-Bone Curve'
+
             self.make_constraint(
                 intermediary,
                 'COPY_SCALE',
                 self.generator.root_bone,
             )
-
-        for tweak, intermediary in zip(self.bones.ctrl.tweaks, self.bones.mch.intermediary):
-            self.make_constraint(tweak, 'COPY_TRANSFORMS', intermediary)
 
         for deform, tweak in zip(self.bones.deform, self.bones.ctrl.tweaks):
             self.make_constraint(deform, 'COPY_TRANSFORMS', tweak)
@@ -522,14 +542,14 @@ class Rig(BaseRig):
             name='Main Shape Size',
             description='Radius of the start, end, and joint control widgets',
             default=0.5,
-            min=0.02,
+            min=0.001,
             max=50.0,
         )
         params.gr_chain_bendy_tweak_shape_size = FloatProperty(
             name='Tweak Shape Size',
             description='Size multiplier for the directional tweak widgets',
             default=0.25,
-            min=0.02,
+            min=0.001,
             max=5.0,
         )
         params.gr_chain_bendy_main_widget = EnumProperty(
@@ -549,6 +569,11 @@ class Rig(BaseRig):
             min=1,
             max=32,
         )
+        params.gr_chain_bendy_parent_def_sequence = BoolProperty(
+            name='Parent DEF Bones in Sequence',
+            description='DEF bones are parented to each other in sequence',
+            default=True,
+        )
         params.gr_chain_bendy_override_parent = BoolProperty(
             name='Override Parent',
             description='Override the parent inherited from the metarig chain',
@@ -565,6 +590,7 @@ class Rig(BaseRig):
         layout.label(text='GameReady Bendy Chain — requires 2 or more connected bones')
         layout.prop(params, 'gr_chain_bendy_bbone_segments')
         layout.prop(params, 'gr_chain_bendy_deformers_per_bbone')
+        layout.prop(params, 'gr_chain_bendy_parent_def_sequence')
         layout.separator()
         layout.prop(params, 'gr_chain_bendy_control_shape_size')
         layout.prop(params, 'gr_chain_bendy_tweak_shape_size')
