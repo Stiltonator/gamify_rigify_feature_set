@@ -4,7 +4,7 @@ The B-Bones are mechanism drivers (MCH-BBone-*). Skinning DEF bones are
 created at the chain joints and at evenly spaced samples inside each B-Bone.
 """
 
-from bpy.props import BoolProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 
 from rigify.base_rig import BaseRig, stage
 from rigify.utils import (
@@ -17,7 +17,69 @@ from rigify.utils import (
 )
 from rigify.utils.naming import make_derived_name
 
-from rigify.utils.widgets_basic import create_circle_widget
+from rigify.utils.widgets_basic import (
+    create_bone_widget,
+    create_circle_widget,
+    create_cube_widget,
+    create_cuboctahedron_widget,
+    create_diamond_widget,
+    create_limb_widget,
+    create_line_widget,
+    create_pivot_widget,
+    create_shoulder_widget,
+    create_sphere_widget,
+    create_truncated_cube_widget,
+)
+from rigify.utils.widgets import create_widget
+
+
+WIDGET_ITEMS = [
+    ('arrow', 'Arrow', 'Directional arrow widget'),
+    ('bone', 'Bone', 'Bone-shaped widget'),
+    ('circle', 'Circle', 'Circular widget'),
+    ('cube', 'Cube', 'Cube widget'),
+    ('cube_truncated', 'T-Cube', 'Truncated cube widget'),
+    ('cuboctahedron', 'Cubocta', 'Cuboctahedron widget'),
+    ('diamond', 'Diamond', 'Diamond widget'),
+    ('limb', 'Limb', 'Limb widget'),
+    ('line', 'Line', 'Line widget'),
+    ('pivot', 'Pivot', 'Pivot axes widget'),
+    ('pivot_cross', 'Cross', 'Pivot cross widget'),
+    ('shoulder', 'Shoulder', 'Shoulder widget'),
+    ('sphere', 'Sphere', 'Sphere widget'),
+]
+
+WIDGET_BUILDERS = {
+    'bone': (create_bone_widget, {}),
+    'circle': (create_circle_widget, {'radius': 0.5}),
+    'cube': (create_cube_widget, {'radius': 0.5}),
+    'cube_truncated': (create_truncated_cube_widget, {'radius': 0.5}),
+    'cuboctahedron': (create_cuboctahedron_widget, {'radius': 0.5}),
+    'diamond': (create_diamond_widget, {'radius': 0.5}),
+    'limb': (create_limb_widget, {}),
+    'line': (create_line_widget, {}),
+    'pivot': (create_pivot_widget, {'radius': 0.5}),
+    'pivot_cross': (create_pivot_widget, {'radius': 0.5, 'square': False}),
+    'shoulder': (create_shoulder_widget, {'radius': 0.5}),
+    'sphere': (create_sphere_widget, {'radius': 0.5}),
+}
+
+ARROW_VERTICES = [
+    (-0.10, -0.35, -0.10), (0.10, -0.35, -0.10),
+    (0.10, -0.35, 0.10), (-0.10, -0.35, 0.10),
+    (-0.10, 0.08, -0.10), (0.10, 0.08, -0.10),
+    (0.10, 0.08, 0.10), (-0.10, 0.08, 0.10),
+    (-0.27, 0.08, -0.27), (0.27, 0.08, -0.27),
+    (0.27, 0.08, 0.27), (-0.27, 0.08, 0.27),
+    (0.0, 0.52, 0.0),
+]
+ARROW_EDGES = [
+    (0, 1), (1, 2), (2, 3), (3, 0),
+    (4, 5), (5, 6), (6, 7), (7, 4),
+    (0, 4), (1, 5), (2, 6), (3, 7),
+    (8, 9), (9, 10), (10, 11), (11, 8),
+    (8, 12), (9, 12), (10, 12), (11, 12),
+]
 
 
 class Rig(BaseRig):
@@ -54,7 +116,11 @@ class Rig(BaseRig):
                 self.min_chain_length,
             )
         self.sample_count = self.params.gr_chain_bendy_deformers_per_bbone
-        self.bbone_segments = self.sample_count + 1
+        self.bbone_segments = self.params.gr_chain_bendy_bbone_segments
+        self.control_shape_size = self.params.gr_chain_bendy_control_shape_size
+        self.tweak_shape_size = self.params.gr_chain_bendy_tweak_shape_size
+        self.main_widget_type = self.params.gr_chain_bendy_main_widget
+        self.tweak_widget_type = self.params.gr_chain_bendy_tweak_widget
         self.resolved_parent = None
 
     @staticmethod
@@ -200,6 +266,7 @@ class Rig(BaseRig):
             pivot_bone.roll = 0.0
 
         sample_names = []
+        tweak_names = []
         deform_names = []
         sample_specs = self._sample_specs()
         for sample_index, spec in enumerate(sample_specs):
@@ -217,6 +284,15 @@ class Rig(BaseRig):
                 self._bone_length(source_name) * 0.12,
                 roll_axis,
             )
+            tweak_name = 'CTRL-' + source_label + '_tweak_' + str(sample_index + 1).zfill(2)
+            tweak_name = self.copy_bone(int_name, tweak_name)
+            self._place_bone(
+                tweak_name,
+                point,
+                direction,
+                self._bone_length(source_name) * 0.2,
+                roll_axis,
+            )
             def_name = make_deformer_name(strip_org(int_name))
             def_name = self.copy_bone(int_name, def_name)
             self._place_bone(
@@ -228,6 +304,7 @@ class Rig(BaseRig):
             )
             edit_bones[def_name].use_deform = True
             sample_names.append(int_name)
+            tweak_names.append(tweak_name)
             deform_names.append(def_name)
 
         self.bones.ctrl.joints = controls
@@ -235,6 +312,7 @@ class Rig(BaseRig):
         self.bones.mch.bbone_drivers = bbone_drivers
         self.bones.mch.intermediary = sample_names
         self.bones.mch.armature_pivot = pivot
+        self.bones.ctrl.tweaks = tweak_names
         self.bones.deform = deform_names
 
         # Map each intermediary to its nearest B-Bone driver(s). A joint is
@@ -282,6 +360,7 @@ class Rig(BaseRig):
         owned.update(self.bones.mch.tangents)
         owned.update(self.bones.mch.bbone_drivers)
         owned.update(self.bones.mch.intermediary)
+        owned.update(self.bones.ctrl.tweaks)
         owned.update(self.bones.deform)
         owned.add(self.bones.mch.armature_pivot)
         if parent in owned:
@@ -295,10 +374,15 @@ class Rig(BaseRig):
 
         # Controls attach directly to the selected chain parent. Tangent bones
         # follow their corresponding controls; drivers and intermediaries are
-        # kept under the MCH pivot; each DEF sample is a child of its MCH-INT.
+        # kept under the MCH pivot; tweak controls follow their corresponding
+        # INT bones, and each DEF sample is a child of its tweak control.
         for control in self.bones.ctrl.joints:
             self.set_bone_parent(control, parent, use_connect=False)
             self.get_bone(control).inherit_scale = 'NONE'
+
+        for tweak in self.bones.ctrl.tweaks:
+            self.set_bone_parent(tweak, parent, use_connect=False)
+            self.get_bone(tweak).inherit_scale = 'NONE'
 
         for tangent, control in zip(self.bones.mch.tangents, self.bones.ctrl.joints):
             self.set_bone_parent(tangent, control, use_connect=False)
@@ -310,11 +394,13 @@ class Rig(BaseRig):
         for name in self.bones.mch.bbone_drivers + self.bones.mch.intermediary:
             self.set_bone_parent(name, pivot, use_connect=False)
 
-        for deform, intermediary in zip(self.bones.deform, self.bones.mch.intermediary):
-            self.set_bone_parent(deform, intermediary, use_connect=False)
+        for deform, tweak in zip(self.bones.deform, self.bones.ctrl.tweaks):
+            self.set_bone_parent(deform, tweak, use_connect=False)
 
         if parent is None:
             for name in self.bones.ctrl.joints:
+                self.generator.disable_auto_parent(name)
+            for name in self.bones.ctrl.tweaks:
                 self.generator.disable_auto_parent(name)
 
     @stage.configure_bones
@@ -338,6 +424,48 @@ class Rig(BaseRig):
         pivot_pose.lock_rotation = (True, True, True)
         pivot_pose.lock_rotation_w = True
         pivot_pose.lock_scale = (True, True, True)
+
+        # The main widget mesh has a fixed 0.5 radius. Scale relative to the
+        # default setting so the current default appearance is preserved.
+        # Disable bone-length scaling so equal settings look equal on every chain.
+        main_widget_scale = self.control_shape_size / 0.5
+        for control in self.bones.ctrl.joints:
+            control_pose = pose_bones[control]
+            control_pose.use_custom_shape_bone_size = False
+            control_pose.custom_shape_scale_xyz = (main_widget_scale,) * 3
+
+        for tweak in self.bones.ctrl.tweaks:
+            # Tweak shape size is an explicit widget size, independent of the
+            # (short) tweak bone length.
+            tweak_pose = pose_bones[tweak]
+            tweak_pose.use_custom_shape_bone_size = False
+            tweak_pose.custom_shape_scale_xyz = (self.tweak_shape_size,) * 3
+
+    def create_selected_widget(self, bone_name, widget_type):
+        old_widget = self.generator.old_widget_table.get(bone_name)
+        force_new = (
+            old_widget is None
+            or old_widget.get('gr_chain_bendy_widget_type') != widget_type
+        )
+
+        if widget_type == 'arrow':
+            widget = create_widget(
+                self.obj, bone_name, widget_force_new=force_new
+            )
+            if widget is not None:
+                widget.data.from_pydata(ARROW_VERTICES, ARROW_EDGES, [])
+                widget.data.update()
+        else:
+            builder, kwargs = WIDGET_BUILDERS[widget_type]
+            widget = builder(
+                self.obj,
+                bone_name,
+                widget_force_new=force_new,
+                **kwargs,
+            )
+
+        if widget is not None:
+            widget['gr_chain_bendy_widget_type'] = widget_type
 
     @stage.rig_bones
     def rig_bendy_chain(self):
@@ -367,16 +495,53 @@ class Rig(BaseRig):
                 self.generator.root_bone,
             )
 
-        for deform, intermediary in zip(self.bones.deform, self.bones.mch.intermediary):
-            self.make_constraint(deform, 'COPY_TRANSFORMS', intermediary)
+        for tweak, intermediary in zip(self.bones.ctrl.tweaks, self.bones.mch.intermediary):
+            self.make_constraint(tweak, 'COPY_TRANSFORMS', intermediary)
+
+        for deform, tweak in zip(self.bones.deform, self.bones.ctrl.tweaks):
+            self.make_constraint(deform, 'COPY_TRANSFORMS', tweak)
 
     @stage.generate_widgets
     def generate_bendy_widgets(self):
         for control in self.bones.ctrl.joints:
-            create_circle_widget(self.obj, control, radius=0.25)
+            self.create_selected_widget(control, self.main_widget_type)
+
+        for tweak in self.bones.ctrl.tweaks:
+            self.create_selected_widget(tweak, self.tweak_widget_type)
 
     @classmethod
     def add_parameters(cls, params):
+        params.gr_chain_bendy_bbone_segments = IntProperty(
+            name='Bendy Bone Segments',
+            description='Number of visual B-Bone segments on each generated B-Bone',
+            default=3,
+            min=1,
+            max=32,
+        )
+        params.gr_chain_bendy_control_shape_size = FloatProperty(
+            name='Main Shape Size',
+            description='Radius of the start, end, and joint control widgets',
+            default=0.5,
+            min=0.02,
+            max=50.0,
+        )
+        params.gr_chain_bendy_tweak_shape_size = FloatProperty(
+            name='Tweak Shape Size',
+            description='Size multiplier for the directional tweak widgets',
+            default=0.25,
+            min=0.02,
+            max=5.0,
+        )
+        params.gr_chain_bendy_main_widget = EnumProperty(
+            name='Main Widget',
+            items=WIDGET_ITEMS,
+            default='circle',
+        )
+        params.gr_chain_bendy_tweak_widget = EnumProperty(
+            name='Tweak Widget',
+            items=WIDGET_ITEMS,
+            default='arrow',
+        )
         params.gr_chain_bendy_deformers_per_bbone = IntProperty(
             name='Deformers Per B-Bone',
             description='Number of evenly spaced interior DEF samples per B-Bone',
@@ -398,7 +563,13 @@ class Rig(BaseRig):
     @classmethod
     def parameters_ui(cls, layout, params):
         layout.label(text='GameReady Bendy Chain — requires 2 or more connected bones')
+        layout.prop(params, 'gr_chain_bendy_bbone_segments')
         layout.prop(params, 'gr_chain_bendy_deformers_per_bbone')
+        layout.separator()
+        layout.prop(params, 'gr_chain_bendy_control_shape_size')
+        layout.prop(params, 'gr_chain_bendy_tweak_shape_size')
+        layout.prop(params, 'gr_chain_bendy_main_widget', text='Main Widget')
+        layout.prop(params, 'gr_chain_bendy_tweak_widget', text='Tweak Widget')
         row = layout.row(align=True)
         row.prop(params, 'gr_chain_bendy_override_parent')
         if params.gr_chain_bendy_override_parent:
