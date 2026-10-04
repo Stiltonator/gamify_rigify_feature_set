@@ -80,21 +80,17 @@ def tag_view3d_redraw(_self, context):
                     area.tag_redraw()
 
 
-def _active_preview(context):
-    obj = context.object
-    bone = context.active_pose_bone
-    if not obj or obj.type != 'ARMATURE' or obj.mode != 'POSE' or not bone:
-        return None
-
+def _previews_for_bone(obj, bone, selected_bone_names, active_bone_name):
+    """Return preview line batches for one Rigify metarig component."""
     config = PREVIEW_CONFIGS.get(bone.rigify_type)
     if not config:
-        return None
+        return []
 
     params = bone.rigify_parameters
     if 'groups' not in config:
         if not all(getattr(params, key, False) for key in config['enabled']):
-            return None
-        return [_preview_item(obj, bone, params, config)]
+            return []
+        return [_preview_item(obj, bone, params, config, selected_bone_names=selected_bone_names, active_bone_name=active_bone_name)]
 
     chain = _connected_pose_chain(obj, bone)
     previews = []
@@ -135,8 +131,36 @@ def _active_preview(context):
             shape_flip_y = anchor_data[3] if len(anchor_data) > 3 else False
             previews.append(_preview_item(
                 obj, anchor, params, group, local_shift, length_factor,
-                widget_bone_length, shape_flip_y))
+                widget_bone_length, shape_flip_y, selected_bone_names, active_bone_name))
 
+    return previews
+
+
+def _active_preview(context):
+    """Return previews for the active component or all preview-capable components."""
+    obj = context.active_object
+    if not obj or obj.type != 'ARMATURE' or obj.mode != 'POSE':
+        return []
+
+    scene = context.scene
+    if scene and getattr(scene, 'gamify_preview_all_gizmos', False):
+        bones = (bone for bone in obj.pose.bones if bone.rigify_type)
+    else:
+        bone = context.active_pose_bone
+        bones = (bone,) if bone else ()
+
+    selected_pose_bones = getattr(context, 'selected_pose_bones', None) or ()
+    selected_bone_names = {pose_bone.name for pose_bone in selected_pose_bones}
+    active_pose_bone = context.active_pose_bone
+    active_bone_name = (
+        active_pose_bone.name
+        if active_pose_bone and active_pose_bone.name in selected_bone_names
+        else None
+    )
+
+    previews = []
+    for bone in bones:
+        previews.extend(_previews_for_bone(obj, bone, selected_bone_names, active_bone_name))
     return previews
 
 
@@ -153,7 +177,8 @@ def _connected_pose_chain(obj, root):
 
 
 def _preview_item(obj, anchor, params, config, local_shift=None, length_factor=1.0,
-                  widget_bone_length=None, shape_flip_y=False):
+                  widget_bone_length=None, shape_flip_y=False, selected_bone_names=None,
+                  active_bone_name=None):
     offset = Vector(getattr(params, config['offset']))
     scale = Vector(getattr(params, config['scale']))
     widget_param = config.get('widget_param')
@@ -180,8 +205,30 @@ def _preview_item(obj, anchor, params, config, local_shift=None, length_factor=1
     transform = (obj.matrix_world @ anchor_transform @ Matrix.LocRotScale(offset, rotation, scale))
     if shape_flip_y:
         transform @= Matrix.Diagonal((1.0, -1.0, 1.0, 1.0))
-    return (transform, _shape_edges(widget_type, config.get('widget_args')),
-            config.get('color', (0.15, 0.8, 1.0, 0.95)))
+    color = _selection_tinted_color(
+        anchor, config.get('color', (0.15, 0.8, 1.0, 0.95)),
+        selected_bone_names or set(), active_bone_name)
+    return (transform, _shape_edges(widget_type, config.get('widget_args')), color)
+
+
+def _selection_tinted_color(anchor, base_color, selected_bone_names, active_bone_name):
+    """Dim preview colors for selected and unselected bones like Pose Mode bones."""
+    if active_bone_name == anchor.name:
+        intensity = 1.0
+        alpha = 0.95
+    elif anchor.name in selected_bone_names:
+        intensity = 0.68
+        alpha = 0.85
+    else:
+        intensity = 0.24
+        alpha = 0.65
+
+    return (
+        base_color[0] * intensity,
+        base_color[1] * intensity,
+        base_color[2] * intensity,
+        min(base_color[3], alpha),
+    )
 
 
 def _shape_edges(widget_type, widget_args=None):
@@ -257,7 +304,8 @@ def _draw_preview():
 
     shader = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
     gpu.state.blend_set('ALPHA')
-    gpu.state.depth_test_set('LESS_EQUAL')
+    draw_in_front = bool(context.scene and context.scene.gamify_gizmos_draw_in_front)
+    gpu.state.depth_test_set('NONE' if draw_in_front else 'LESS_EQUAL')
     try:
         shader.bind()
         shader.uniform_float('viewportSize', (context.region.width, context.region.height))
@@ -275,8 +323,23 @@ def _draw_preview():
         gpu.state.blend_set('NONE')
 
 
+
 def register():
     global _draw_handle
+    if not hasattr(bpy.types.Scene, 'gamify_preview_all_gizmos'):
+        bpy.types.Scene.gamify_preview_all_gizmos = bpy.props.BoolProperty(
+            name="Preview All Gizmos",
+            description="Show previews for all metarig components supported by the preview system",
+            default=False,
+            update=tag_view3d_redraw,
+        )
+    if not hasattr(bpy.types.Scene, 'gamify_gizmos_draw_in_front'):
+        bpy.types.Scene.gamify_gizmos_draw_in_front = bpy.props.BoolProperty(
+            name="Gizmos Draw In Front",
+            description="Draw widget previews over scene geometry",
+            default=False,
+            update=tag_view3d_redraw,
+        )
     if _draw_handle is None:
         _draw_handle = bpy.types.SpaceView3D.draw_handler_add(
             _draw_preview, (), 'WINDOW', 'POST_VIEW')
@@ -284,6 +347,10 @@ def register():
 
 def unregister():
     global _draw_handle
+    if hasattr(bpy.types.Scene, 'gamify_preview_all_gizmos'):
+        del bpy.types.Scene.gamify_preview_all_gizmos
+    if hasattr(bpy.types.Scene, 'gamify_gizmos_draw_in_front'):
+        del bpy.types.Scene.gamify_gizmos_draw_in_front
     if _draw_handle is not None:
         bpy.types.SpaceView3D.draw_handler_remove(_draw_handle, 'WINDOW')
         _draw_handle = None
