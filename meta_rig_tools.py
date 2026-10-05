@@ -13,12 +13,43 @@ def _is_valid_rigify_metarig(context):
     obj = context.active_object
     if not obj or obj.type != 'ARMATURE':
         return False
-
     try:
         from rigify.utils.rig import is_valid_metarig
         return bool(is_valid_metarig(context))
     except (ImportError, AttributeError, RuntimeError, TypeError):
         return False
+
+
+def _activate_armature(context, obj, mode='OBJECT'):
+    """Select and activate an armature, then restore its requested mode."""
+    active = context.view_layer.objects.active
+    if active and active.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    for selected in context.selected_objects:
+        selected.select_set(False)
+
+    obj.hide_set(False, view_layer=context.view_layer)
+    obj.select_set(True)
+    context.view_layer.objects.active = obj
+
+    if mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode=mode)
+
+
+def _show_bone_collections(rig, context):
+    """Show MCH/DEF collections requested in the Gamify menu."""
+    scene = context.scene
+    requested = (
+        ('MCH', getattr(scene, 'gamify_show_mch_bones', False)),
+        ('DEF', getattr(scene, 'gamify_show_def_bones', False)),
+    )
+    for name, show in requested:
+        if not show:
+            continue
+        collection = rig.data.collections.get(name)
+        if collection is not None:
+            collection.is_visible = True
 
 
 class VIEW3D_OT_gamify_regenerate_meta_rig(Operator):
@@ -36,8 +67,8 @@ class VIEW3D_OT_gamify_regenerate_meta_rig(Operator):
             self.report({'WARNING'}, "Select a valid Rigify metarig first.")
             return {'CANCELLED'}
 
-        # Rigify's own Generate/Re-Generate button calls this operator. Ensure
-        # it runs outside Edit Mode, then restore the user's original mode.
+        # Rigify generation runs outside Edit Mode. Remember the starting mode
+        # so it can be applied to the generated rig after a successful run.
         obj = context.active_object
         original_mode = obj.mode
         if original_mode == 'EDIT':
@@ -47,28 +78,32 @@ class VIEW3D_OT_gamify_regenerate_meta_rig(Operator):
             result = bpy.ops.pose.rigify_generate()
         except (RuntimeError, AttributeError) as exc:
             self.report({'ERROR'}, f"Rigify could not regenerate the rig: {exc}")
+            if obj.name in context.view_layer.objects:
+                _activate_armature(context, obj, original_mode)
             return {'CANCELLED'}
-        finally:
-            active = context.view_layer.objects.active
-            if (original_mode == 'EDIT' and active == obj and
-                    obj.name in context.view_layer.objects):
-                bpy.ops.object.mode_set(mode='EDIT')
 
         if 'CANCELLED' in result:
+            if obj.name in context.view_layer.objects:
+                _activate_armature(context, obj, original_mode)
             return {'CANCELLED'}
 
-        # Hide the source metarig after a successful generation when its
-        # generated rig is available in this view layer. hide_set is local to
-        # the view layer, so the Toggle Meta/Generated Rig tool can reveal it.
-        generated_rig = getattr(obj.data, 'rigify_target_rig', None)
-        if (
-            generated_rig
-            and generated_rig.type == 'ARMATURE'
-            and generated_rig != obj
-            and context.view_layer.objects.get(generated_rig.name) == generated_rig
-        ):
-            obj.hide_set(True, view_layer=context.view_layer)
+        target = getattr(obj.data, 'rigify_target_rig', None)
+        if (not target or target.type != 'ARMATURE' or
+                context.view_layer.objects.get(target.name) is not target):
+            self.report(
+                {'WARNING'},
+                "Rigify finished, but the generated rig could not be found in this view layer.",
+            )
+            if obj.name in context.view_layer.objects:
+                _activate_armature(context, obj, original_mode)
+            return {'CANCELLED'}
 
+        _show_bone_collections(target, context)
+        _activate_armature(context, target, original_mode)
+
+        # Keep the existing workflow: after regeneration, hide the metarig and
+        # leave the generated rig selected and active.
+        obj.hide_set(True, view_layer=context.view_layer)
         return {'FINISHED'}
 
 

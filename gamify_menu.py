@@ -1,6 +1,7 @@
 """Gamify actions and preview controls in the 3D View header menu."""
 
 import bpy
+from bpy.props import BoolProperty
 
 
 class VIEW3D_MT_gamify_menu(bpy.types.Menu):
@@ -14,6 +15,7 @@ class VIEW3D_MT_gamify_menu(bpy.types.Menu):
             text="Toggle Meta/Generated Rig",
         )
 
+        layout.separator()
         obj = context.active_object
         row = layout.row()
         row.enabled = _is_valid_rigify_metarig(context, obj)
@@ -21,6 +23,8 @@ class VIEW3D_MT_gamify_menu(bpy.types.Menu):
             "view3d.gamify_regenerate_meta_rig",
             text="Regenerate Meta Rig",
         )
+        layout.prop(context.scene, 'gamify_show_mch_bones', text="Show MCH Bones")
+        layout.prop(context.scene, 'gamify_show_def_bones', text="Show DEF Bones")
 
         if obj and obj.type == 'ARMATURE' and obj.mode == 'POSE':
             layout.separator()
@@ -49,6 +53,16 @@ def _draw_gamify_header(self, context):
 
 
 def register():
+    bpy.types.Scene.gamify_show_mch_bones = BoolProperty(
+        name="Show MCH Bones",
+        description="Show the generated rig's MCH bone collection after regeneration",
+        default=False,
+    )
+    bpy.types.Scene.gamify_show_def_bones = BoolProperty(
+        name="Show DEF Bones",
+        description="Show the generated rig's DEF bone collection after regeneration",
+        default=False,
+    )
     bpy.utils.register_class(VIEW3D_MT_gamify_menu)
     bpy.types.VIEW3D_MT_editor_menus.append(_draw_gamify_header)
 
@@ -58,6 +72,10 @@ def unregister():
         bpy.types.VIEW3D_MT_editor_menus.remove(_draw_gamify_header)
     except (RuntimeError, ValueError):
         pass
+    if hasattr(bpy.types.Scene, 'gamify_show_mch_bones'):
+        del bpy.types.Scene.gamify_show_mch_bones
+    if hasattr(bpy.types.Scene, 'gamify_show_def_bones'):
+        del bpy.types.Scene.gamify_show_def_bones
     try:
         bpy.utils.unregister_class(VIEW3D_MT_gamify_menu)
     except (RuntimeError, ValueError):
