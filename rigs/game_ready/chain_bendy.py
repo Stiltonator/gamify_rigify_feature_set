@@ -165,7 +165,7 @@ class Rig(BaseRig):
         return self._orient_axes
 
     def _conform_orientation(self, direction, roll_axis):
-        """Orientation for animator-facing and DEF bones: the override if set."""
+        """Orientation for tweak and DEF bones: the override if set."""
         axes = self._orientation_override()
         if axes is None:
             return direction, roll_axis
@@ -242,6 +242,7 @@ class Rig(BaseRig):
         bbone_drivers = []
         tangent_bones = []
         controls = []
+        point_controls = []
 
         # One start point, one point at every connected joint, and one end.
         for point_index in range(len(self.org_chain) + 1):
@@ -255,7 +256,11 @@ class Rig(BaseRig):
             else:
                 point_role = 'joint_' + str(point_index)
 
-            control = self.copy_bone(
+            skip_control = (
+                point_role == 'start' and self.params.gr_chain_bendy_skip_start_control
+                or point_role == 'end' and self.params.gr_chain_bendy_skip_end_control
+            )
+            control = None if skip_control else self.copy_bone(
                 source_name,
                 make_derived_name(source_label, 'ctrl', '_bendy_' + point_role),
             )
@@ -288,12 +293,13 @@ class Rig(BaseRig):
                 roll_axis.normalize()
 
             point_length = self._bone_length(source_name) * 0.25
-            control_direction, control_roll = self._conform_orientation(direction, roll_axis)
-            self._place_bone(control, point, control_direction, point_length, control_roll)
-            # Tangents define the B-Bone curve tangents, so they always keep the
-            # chain direction, even when the controls' orientation is overridden.
+            # Main controls and tangents always share the B-Bone chain orientation.
+            # The orientation override applies only to tweaks and DEF samples.
+            if control is not None:
+                self._place_bone(control, point, direction, point_length, roll_axis)
+                controls.append(control)
             self._place_bone(tangent, point, direction, point_length, roll_axis)
-            controls.append(control)
+            point_controls.append(control)
             tangent_bones.append(tangent)
 
         # Each metarig segment gets a separate B-Bone driver between two
@@ -383,6 +389,8 @@ class Rig(BaseRig):
             deform_names.append(def_name)
 
         self.bones.ctrl.joints = controls
+        # Keep endpoint slots even when their animator-facing controls are omitted.
+        self._point_controls = point_controls
         self.bones.mch.tangents = tangent_bones
         self.bones.mch.bbone_drivers = bbone_drivers
         self.bones.mch.intermediary = sample_names
@@ -486,10 +494,18 @@ class Rig(BaseRig):
             self.set_bone_parent(control, parent, use_connect=False)
             self.get_bone(control).inherit_scale = 'NONE'
 
+        # Omitted controls leave their tangent directly attached to the chain parent.
+        for tangent, control in zip(self.bones.mch.tangents, self._point_controls):
+            self.set_bone_parent(tangent, control or parent, use_connect=False)
+            if control is None:
+                self.get_bone(tangent).inherit_scale = 'NONE'
+                if parent is None:
+                    self.generator.disable_auto_parent(tangent)
+
         # The end control may follow a different bone to the rest of the chain,
         # so that bone drives the end of the chain.
         if self.params.gr_chain_bendy_end_override_parent:
-            end_control = self.bones.ctrl.joints[-1]
+            end_control = self._point_controls[-1] or self.bones.mch.tangents[-1]
             end_requested = self.params.gr_chain_bendy_end_parent.strip()
             chain_name = self._label(self.org_chain[0])
 
@@ -525,9 +541,6 @@ class Rig(BaseRig):
             self.bones.ctrl.tweaks, self.bones.mch.intermediary
         ):
             self.set_bone_parent(tweak, intermediary, use_connect=False)
-
-        for tangent, control in zip(self.bones.mch.tangents, self.bones.ctrl.joints):
-            self.set_bone_parent(tangent, control, use_connect=False)
 
         pivot = self.bones.mch.armature_pivot
         self.set_bone_parent(pivot, None, use_connect=False)
@@ -621,12 +634,10 @@ class Rig(BaseRig):
             self.make_constraint(driver, 'COPY_LOCATION', self.bones.mch.tangents[index])
             self.make_constraint(driver, 'STRETCH_TO', self.bones.mch.tangents[index + 1])
 
-        # With an overridden control orientation the tangents keep the chain
-        # direction, so a world-space Copy Transforms would force them to the
-        # control's orientation. They are already children of their controls and
-        # follow them through parenting instead.
-        if not self.params.gr_chain_bendy_override_orientation:
-            for tangent, control in zip(self.bones.mch.tangents, self.bones.ctrl.joints):
+        # Main controls retain the tangent orientation regardless of the sample
+        # orientation override, so use the same driving constraints in both cases.
+        for tangent, control in zip(self.bones.mch.tangents, self._point_controls):
+            if control is not None:
                 self.make_constraint(tangent, 'COPY_TRANSFORMS', control)
 
         for intermediary, targets, (driver, head_tail) in zip(
@@ -727,7 +738,7 @@ class Rig(BaseRig):
         )
         params.gr_chain_bendy_end_override_parent = BoolProperty(
             name='Override End Control Parent',
-            description='Parent the end control of the chain to a named generated bone, '
+            description='Parent the end control (or internal endpoint if omitted) to a named generated bone, '
                         'so that bone drives the end of the chain',
             default=False,
         )
@@ -735,6 +746,16 @@ class Rig(BaseRig):
             name='End Parent',
             description="Exact generated bone name, e.g. DEF-hand.L; use NONE for no parent",
             default='',
+        )
+        params.gr_chain_bendy_skip_start_control = BoolProperty(
+            name='Skip Generating Start Control',
+            description='Omit the start main control; its internal tangent follows the chain parent',
+            default=False,
+        )
+        params.gr_chain_bendy_skip_end_control = BoolProperty(
+            name='Skip Generating End Control',
+            description='Omit the end main control; its internal tangent follows the chain parent or End Parent override',
+            default=False,
         )
         params.gr_chain_bendy_skip_first_def = BoolProperty(
             name='Skip Generating First DEF',
@@ -748,13 +769,13 @@ class Rig(BaseRig):
         )
         params.gr_chain_bendy_override_orientation = BoolProperty(
             name='Override Bone Orientation',
-            description='Orient the generated controls, tweaks and DEF bones to match an '
+            description='Orient the generated tweaks and DEF bones to match an '
                         'orientation bone instead of following the chain direction',
             default=False,
         )
         params.gr_chain_bendy_orient_bone = StringProperty(
             name='Orientation Bone',
-            description='Metarig bone whose orientation the generated bones conform to',
+            description='Metarig bone whose orientation the tweaks and DEF bones conform to',
             default='',
         )
 
@@ -766,6 +787,8 @@ class Rig(BaseRig):
         layout.prop(params, 'gr_chain_bendy_parent_def_sequence')
         layout.prop(params, 'gr_chain_bendy_skip_first_def')
         layout.prop(params, 'gr_chain_bendy_skip_last_def')
+        layout.prop(params, 'gr_chain_bendy_skip_start_control')
+        layout.prop(params, 'gr_chain_bendy_skip_end_control')
         layout.separator()
         layout.prop(params, 'gr_chain_bendy_control_shape_size')
         layout.prop(params, 'gr_chain_bendy_tweak_shape_size')
