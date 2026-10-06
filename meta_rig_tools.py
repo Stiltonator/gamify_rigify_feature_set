@@ -99,6 +99,9 @@ class VIEW3D_OT_gamify_regenerate_meta_rig(Operator):
             return {'CANCELLED'}
 
         _show_bone_collections(target, context)
+        merge_warnings = target.get('gamify_bendy_merge_warnings', '')
+        if merge_warnings:
+            self.report({'WARNING'}, merge_warnings)
         _activate_armature(context, target, original_mode)
 
         # Keep the existing workflow: after regeneration, hide the metarig and

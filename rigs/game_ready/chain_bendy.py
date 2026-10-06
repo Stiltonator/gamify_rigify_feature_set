@@ -5,6 +5,8 @@ created at the chain joints and at evenly spaced samples inside each B-Bone.
 """
 
 import bpy
+import warnings
+from mathutils import Vector
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 
 from rigify.base_rig import BaseRig, stage
@@ -126,6 +128,106 @@ class Rig(BaseRig):
         self.resolved_parent = None
         # Resolved lazily: edit bones are not available during initialize.
         self._orient_axes = None
+        self._mirror_groups = {}
+        if not hasattr(self.generator, '_gamify_bendy_rigs'):
+            self.generator._gamify_bendy_rigs = []
+        self.generator._gamify_bendy_rigs.append(self)
+
+    def _merge_warning(self, message):
+        warnings.warn('Gamify Chain Bendy: ' + message, stacklevel=2)
+        # Retain feedback on the generated armature as well as in Blender's console.
+        key = 'gamify_bendy_merge_warnings'
+        previous = self.obj.get(key, '')
+        self.obj[key] = previous + ('\n' if previous else '') + message
+
+    def _world_chain(self):
+        bones = self.obj.data.edit_bones
+        points = [bones[name].head.copy() for name in self.org_chain]
+        points.append(bones[self.org_chain[-1]].tail.copy())
+        return [self.obj.matrix_world @ point for point in points]
+
+    def _prepare_mirror_groups(self):
+        """Pair opted-in mirrored chains before any controls are generated."""
+        if getattr(self.generator, '_gamify_bendy_merges_prepared', False):
+            return
+        self.generator._gamify_bendy_merges_prepared = True
+        self.obj['gamify_bendy_merge_warnings'] = ''
+        rigs = sorted(self.generator._gamify_bendy_rigs, key=lambda rig: rig.org_chain[0])
+        world = {rig: rig._world_chain() for rig in rigs}
+        tolerance = 1.0e-5
+        for role, index in (('start', 0), ('end', -1)):
+            enabled = [rig for rig in rigs if getattr(rig.params, 'gr_chain_bendy_mirror_merge_' + role)]
+            candidates = {}
+            for rig in enabled:
+                points = world[rig]
+                matches = []
+                if abs(points[index].x) <= tolerance:
+                    for other in enabled:
+                        if other is rig or len(world[other]) != len(points):
+                            continue
+                        mirrored = all(
+                            (Vector((-a.x, a.y, a.z)) - b).length <= tolerance
+                            for a, b in zip(points, world[other])
+                        )
+                        # Exclude chains lying entirely in the centre plane.
+                        opposite_sides = any(a.x * b.x < -tolerance ** 2
+                                             for a, b in zip(points, world[other]))
+                        if mirrored and opposite_sides and (points[index] - world[other][index]).length <= tolerance:
+                            matches.append(other)
+                candidates[rig] = matches
+            for rig in enabled:
+                matches = candidates[rig]
+                if len(matches) != 1 or len(candidates[matches[0]]) != 1:
+                    rig._merge_warning(
+                        f"{rig._label(rig.org_chain[0])}: Mirror Merge {role.title()} has no unique "
+                        'mirrored partner at world X=0; the endpoint remains independent.'
+                    )
+                    continue
+                other = matches[0]
+                if role in rig._mirror_groups:
+                    continue
+                pair = (rig, other)
+                bones = self.obj.data.edit_bones
+                sources = [bones[item.org_chain[index]] for item in pair]
+                # Same-role endpoints travel in opposite directions through a smooth seam.
+                direction = sources[0].y_axis.normalized() - sources[1].y_axis.normalized()
+                if direction.length < tolerance:
+                    direction = sources[0].y_axis.copy()
+                direction.normalize()
+                roll = sources[0].x_axis.normalized() + sources[1].x_axis.normalized()
+                roll -= direction * roll.dot(direction)
+                if roll.length < tolerance:
+                    roll = min((Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))),
+                               key=lambda axis: abs(axis.dot(direction)))
+                    roll -= direction * roll.dot(direction)
+                group = dict(rigs=pair, role=role, index=index, direction=direction,
+                             roll=roll.normalized(), anchors={}, parents={})
+                for item in pair:
+                    item._mirror_groups[role] = group
+
+    def _generate_merged_endpoint(self, group, source_name, point, length):
+        """Generate one shared frame/control, plus a parent anchor for each side."""
+        if 'frame' not in group:
+            group['owner'] = self
+            canonical = group['rigs'][0]
+            label = canonical._label(canonical.org_chain[group['index']])
+            suffix = '_bendy_merged_' + group['role']
+            frame = self.copy_bone(source_name, make_derived_name(label, 'mch', suffix))
+            self._place_bone(frame, point, group['direction'], length, group['roll'])
+            group['frame'] = frame
+            visible = [rig for rig in group['rigs'] if not getattr(
+                rig.params, 'gr_chain_bendy_skip_' + group['role'] + '_control')]
+            group['control'] = None
+            if visible:
+                control = self.copy_bone(source_name, make_derived_name(label, 'ctrl', suffix))
+                self._place_bone(control, point, group['direction'], length, group['roll'])
+                group['control'] = control
+                group['style_rig'] = visible[0]
+        anchor = self.copy_bone(source_name, make_derived_name(
+            self._label(source_name), 'mch', '_bendy_merge_' + group['role'] + '_parent'))
+        self._place_bone(anchor, point, group['direction'], length, group['roll'])
+        group['anchors'][self] = anchor
+        return group['control']
 
     @staticmethod
     def _label(name):
@@ -238,6 +340,7 @@ class Rig(BaseRig):
 
     @stage.generate_bones
     def generate_bendy_bones(self):
+        self._prepare_mirror_groups()
         edit_bones = self.obj.data.edit_bones
         bbone_drivers = []
         tangent_bones = []
@@ -260,7 +363,8 @@ class Rig(BaseRig):
                 point_role == 'start' and self.params.gr_chain_bendy_skip_start_control
                 or point_role == 'end' and self.params.gr_chain_bendy_skip_end_control
             )
-            control = None if skip_control else self.copy_bone(
+            group = self._mirror_groups.get(point_role)
+            control = None if skip_control or group else self.copy_bone(
                 source_name,
                 make_derived_name(source_label, 'ctrl', '_bendy_' + point_role),
             )
@@ -293,10 +397,15 @@ class Rig(BaseRig):
                 roll_axis.normalize()
 
             point_length = self._bone_length(source_name) * 0.25
+            if group:
+                control = self._generate_merged_endpoint(group, source_name, point, point_length)
+                direction = group['direction'] if self is group['rigs'][0] else -group['direction']
+                roll_axis = group['roll']
             # Main controls and tangents always share the B-Bone chain orientation.
             # The orientation override applies only to tweaks and DEF samples.
-            if control is not None:
-                self._place_bone(control, point, direction, point_length, roll_axis)
+            if control is not None and (not group or group['owner'] is self):
+                if not group:
+                    self._place_bone(control, point, direction, point_length, roll_axis)
                 controls.append(control)
             self._place_bone(tangent, point, direction, point_length, roll_axis)
             point_controls.append(control)
@@ -436,6 +545,11 @@ class Rig(BaseRig):
         owned.update(self.bones.ctrl.tweaks)
         owned.update(self.bones.deform)
         owned.add(self.bones.mch.armature_pivot)
+        for group in self._mirror_groups.values():
+            owned.add(group['frame'])
+            owned.update(group['anchors'].values())
+            if group['control']:
+                owned.add(group['control'])
 
         parent = default_parent
         if self.params.gr_chain_bendy_override_parent:
@@ -491,11 +605,18 @@ class Rig(BaseRig):
         # Each tweak is parented to its corresponding INT, while DEF parenting
         # is either sequential or flat under the selected chain parent.
         for control in self.bones.ctrl.joints:
+            if any(group['control'] == control for group in self._mirror_groups.values()):
+                continue
             self.set_bone_parent(control, parent, use_connect=False)
             self.get_bone(control).inherit_scale = 'NONE'
 
         # Omitted controls leave their tangent directly attached to the chain parent.
-        for tangent, control in zip(self.bones.mch.tangents, self._point_controls):
+        for index, (tangent, control) in enumerate(zip(self.bones.mch.tangents, self._point_controls)):
+            role = 'start' if index == 0 else 'end' if index == len(self._point_controls) - 1 else None
+            group = self._mirror_groups.get(role)
+            if group:
+                self.set_bone_parent(tangent, group['control'] or group['frame'], use_connect=False)
+                continue
             self.set_bone_parent(tangent, control or parent, use_connect=False)
             if control is None:
                 self.get_bone(tangent).inherit_scale = 'NONE'
@@ -504,8 +625,11 @@ class Rig(BaseRig):
 
         # The end control may follow a different bone to the rest of the chain,
         # so that bone drives the end of the chain.
+        end_parent = parent
         if self.params.gr_chain_bendy_end_override_parent:
-            end_control = self._point_controls[-1] or self.bones.mch.tangents[-1]
+            end_group = self._mirror_groups.get('end')
+            end_control = (end_group['anchors'][self] if end_group else
+                           self._point_controls[-1] or self.bones.mch.tangents[-1])
             end_requested = self.params.gr_chain_bendy_end_parent.strip()
             chain_name = self._label(self.org_chain[0])
 
@@ -536,6 +660,25 @@ class Rig(BaseRig):
             self.set_bone_parent(end_control, end_parent, use_connect=False)
             if end_parent is None:
                 self.generator.disable_auto_parent(end_control)
+
+        for role, group in self._mirror_groups.items():
+            endpoint_parent = parent if role == 'start' else end_parent
+            anchor = group['anchors'][self]
+            self.set_bone_parent(anchor, endpoint_parent, use_connect=False)
+            if endpoint_parent is None:
+                self.generator.disable_auto_parent(anchor)
+            group['parents'][self] = endpoint_parent
+            if group['owner'] is self:
+                self.set_bone_parent(group['frame'], None, use_connect=False)
+                self.generator.disable_auto_parent(group['frame'])
+                if group['control']:
+                    self.set_bone_parent(group['control'], group['frame'], use_connect=False)
+                    self.get_bone(group['control']).inherit_scale = 'NONE'
+            if len(group['parents']) == 2 and len(set(group['parents'].values())) > 1:
+                names = ', '.join(f"{rig._label(rig.org_chain[0])}: {target or 'NONE'}"
+                                  for rig, target in group['parents'].items())
+                self._merge_warning(f'Mirror Merge {role.title()} has different parent targets ({names}); '
+                                    'both parents contribute equally to the shared endpoint.')
 
         for tweak, intermediary in zip(
             self.bones.ctrl.tweaks, self.bones.mch.intermediary
@@ -589,11 +732,12 @@ class Rig(BaseRig):
         # The main widget mesh has a fixed 0.5 radius. Scale relative to the
         # default setting so the current default appearance is preserved.
         # Disable bone-length scaling so equal settings look equal on every chain.
-        main_widget_scale = self.control_shape_size / 0.5
         for control in self.bones.ctrl.joints:
             control_pose = pose_bones[control]
             control_pose.use_custom_shape_bone_size = False
-            control_pose.custom_shape_scale_xyz = (main_widget_scale,) * 3
+            style = next((group['style_rig'] for group in self._mirror_groups.values()
+                          if group['control'] == control), self)
+            control_pose.custom_shape_scale_xyz = (style.control_shape_size / 0.5,) * 3
 
         for tweak in self.bones.ctrl.tweaks:
             # Tweak shape size is an explicit widget size, independent of the
@@ -636,7 +780,21 @@ class Rig(BaseRig):
 
         # Main controls retain the tangent orientation regardless of the sample
         # orientation override, so use the same driving constraints in both cases.
-        for tangent, control in zip(self.bones.mch.tangents, self._point_controls):
+        for group in self._mirror_groups.values():
+            if group['owner'] is self:
+                constraint = self.obj.pose.bones[group['frame']].constraints.new('ARMATURE')
+                constraint.name = 'Mirror Merge Parent Blend'
+                constraint.use_current_location = True
+                for rig in group['rigs']:
+                    target = constraint.targets.new()
+                    target.target = self.obj
+                    target.subtarget = group['anchors'][rig]
+                    target.weight = 0.5
+        for index, (tangent, control) in enumerate(zip(self.bones.mch.tangents, self._point_controls)):
+            role = 'start' if index == 0 else 'end' if index == len(self._point_controls) - 1 else None
+            if role in self._mirror_groups:
+                # Parenting preserves the opposite rest directions across the seam.
+                continue
             if control is not None:
                 self.make_constraint(tangent, 'COPY_TRANSFORMS', control)
 
@@ -676,13 +834,25 @@ class Rig(BaseRig):
     @stage.generate_widgets
     def generate_bendy_widgets(self):
         for control in self.bones.ctrl.joints:
-            self.create_selected_widget(control, self.main_widget_type)
+            style = next((group['style_rig'] for group in self._mirror_groups.values()
+                          if group['control'] == control), self)
+            self.create_selected_widget(control, style.main_widget_type)
 
         for tweak in self.bones.ctrl.tweaks:
             self.create_selected_widget(tweak, self.tweak_widget_type)
 
     @classmethod
     def add_parameters(cls, params):
+        for role in ('start', 'end'):
+            setattr(params, 'gr_chain_bendy_mirror_merge_' + role, BoolProperty(
+                name='Mirror Merge ' + role.title(),
+                description='Share this endpoint and smooth tangents with an opted-in mirrored chain at world X=0',
+                default=False,
+            ))
+            setattr(params, 'gr_chain_bendy_ui_' + role, BoolProperty(
+                name=role.title() + ' Point', default=False,
+                description='Expand ' + role + ' point settings',
+            ))
         params.gr_chain_bendy_bbone_segments = IntProperty(
             name='Bendy Bone Segments',
             description='Number of visual B-Bone segments on each generated B-Bone',
@@ -785,24 +955,26 @@ class Rig(BaseRig):
         layout.prop(params, 'gr_chain_bendy_bbone_segments')
         layout.prop(params, 'gr_chain_bendy_deformers_per_bbone')
         layout.prop(params, 'gr_chain_bendy_parent_def_sequence')
-        layout.prop(params, 'gr_chain_bendy_skip_first_def')
-        layout.prop(params, 'gr_chain_bendy_skip_last_def')
-        layout.prop(params, 'gr_chain_bendy_skip_start_control')
-        layout.prop(params, 'gr_chain_bendy_skip_end_control')
         layout.separator()
         layout.prop(params, 'gr_chain_bendy_control_shape_size')
         layout.prop(params, 'gr_chain_bendy_tweak_shape_size')
         layout.prop(params, 'gr_chain_bendy_main_widget', text='Main Widget')
         layout.prop(params, 'gr_chain_bendy_tweak_widget', text='Tweak Widget')
-        row = layout.row(align=True)
-        row.prop(params, 'gr_chain_bendy_override_parent')
-        if params.gr_chain_bendy_override_parent:
-            row.prop(params, 'gr_chain_bendy_parent', text='')
-
-        row = layout.row(align=True)
-        row.prop(params, 'gr_chain_bendy_end_override_parent')
-        if params.gr_chain_bendy_end_override_parent:
-            row.prop(params, 'gr_chain_bendy_end_parent', text='')
+        for role in ('start', 'end'):
+            box = layout.box()
+            expanded = getattr(params, 'gr_chain_bendy_ui_' + role)
+            box.prop(params, 'gr_chain_bendy_ui_' + role,
+                     icon='TRIA_DOWN' if expanded else 'TRIA_RIGHT', emboss=False)
+            if expanded:
+                box.prop(params, 'gr_chain_bendy_skip_' + role + '_control')
+                box.prop(params, 'gr_chain_bendy_mirror_merge_' + role)
+                box.prop(params, 'gr_chain_bendy_skip_first_def' if role == 'start'
+                         else 'gr_chain_bendy_skip_last_def')
+                override = 'gr_chain_bendy_override_parent' if role == 'start' else 'gr_chain_bendy_end_override_parent'
+                target = 'gr_chain_bendy_parent' if role == 'start' else 'gr_chain_bendy_end_parent'
+                box.prop(params, override)
+                if getattr(params, override):
+                    box.prop(params, target)
 
         row = layout.row(align=True)
         row.prop(params, 'gr_chain_bendy_override_orientation')
