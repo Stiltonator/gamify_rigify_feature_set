@@ -11,6 +11,16 @@ also applies to them when regenerating.
 The **Start Point** and **End Point** rollouts contain the respective main-control
 omission, DEF omission, parent override, and mirror merge settings. The Start Point
 parent override still sets the attachment for the whole chain, as before.
+Default attachments prefer the metarig parent's generated DEF counterpart,
+then the control using its original metarig name. For a parent `Face`, this means
+`DEF-Face`, then `Face`. If neither exists, the chain uses the rig root and warns;
+it never automatically falls back to `ORG-Face`. Every explicit parent name,
+including `Face`, `ORG-Face`, `DEF-Face`, and `MCH-Face`, is honored exactly,
+subject to cycle checks. If that exact bone does not exist, generation reports
+an error rather than choosing a different parent. DEF-first lookup applies only
+when the parent override is disabled.
+`NONE` retains its no-parent behavior. This uses the shared resolver in `def_parent.py`
+without applying that mixin's single-segment DEF-chain policy to the bendy rig.
 
 Enable **Mirror Merge Start** or **Mirror Merge End** on both mirrored chains.
 The corresponding endpoints must coincide on world X=0, including matching Y/Z

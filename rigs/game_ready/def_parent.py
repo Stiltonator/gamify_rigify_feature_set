@@ -1,7 +1,25 @@
 """Shared generated-DEF parenting rules for GameReady Rigify adapters."""
 
 from rigify.base_rig import stage
-from rigify.utils.naming import make_derived_name
+from rigify.utils.naming import make_derived_name, strip_org
+
+
+def resolve_generated_parent(edit_bones, source):
+    """Prefer the generated DEF counterpart, then the unsuffixed control name.
+
+    Return None when neither exists; never return an ORG bone. Callers choose
+    their own root/no-parent fallback and preserve their own hierarchy policy.
+    """
+    if not source:
+        return None
+    original = strip_org(source)
+    if original.startswith('DEF-'):
+        original = original[4:]
+    deform = make_derived_name(original, 'def')
+    for candidate in (deform, original):
+        if not candidate.startswith('ORG-') and candidate in edit_bones:
+            return candidate
+    return None
 
 
 class DefParentMixin:

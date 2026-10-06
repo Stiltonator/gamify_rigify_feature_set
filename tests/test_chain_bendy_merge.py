@@ -84,9 +84,14 @@ for method in rig_class.body:
         method.decorator_list = [decorator for decorator in method.decorator_list
                                  if isinstance(decorator, ast.Name)]
 namespace = dict(Vector=Vector, warnings=warnings, re=re, strip_org=lambda name: name.removeprefix('ORG-'),
-                 make_derived_name=lambda name, kind, suffix: kind.upper() + '-' + name + suffix,
+                 make_derived_name=lambda name, kind, suffix='': kind.upper() + '-' + name + suffix,
                  make_mechanism_name=lambda name: 'MCH-' + name,
                  make_deformer_name=lambda name: 'DEF-' + name)
+parent_source = source.with_name('def_parent.py')
+parent_tree = ast.parse(parent_source.read_text(encoding='utf-8-sig'))
+resolver = next(node for node in parent_tree.body if isinstance(node, ast.FunctionDef)
+                and node.name == 'resolve_generated_parent')
+exec(compile(ast.Module(body=[resolver], type_ignores=[]), str(parent_source), 'exec'), namespace)
 exec(compile(ast.Module(body=[rig_class], type_ignores=[]), str(source), 'exec'), namespace)
 
 
@@ -167,6 +172,67 @@ def pair(role='start', skip=(False, False), shift=(0, 0, 0)):
 
 
 class MirrorMergeTests(unittest.TestCase):
+    def test_default_parent_prefers_def_then_control_never_org(self):
+        for available, expected in ((('Face', 'DEF-Face'), 'DEF-Face'),
+                                    (('Face',), 'Face'), ((), 'root')):
+            rigs = pair()
+            obj = rigs[0].obj
+            obj.data.edit_bones['ORG-Face'] = Bone('ORG-Face', (0, 0, 0), (0, 1, 0))
+            for name in available:
+                obj.data.edit_bones[name] = Bone(name, (0, 0, 0), (0, 1, 0))
+            for rig in rigs:
+                rig.get_bone(rig.org_chain[0]).parent = obj.data.edit_bones['ORG-Face']
+            with warnings.catch_warnings(record=True):
+                self.generate(rigs)
+            for rig in rigs:
+                self.assertEqual(rig.resolved_parent, expected)
+            for bone in obj.data.edit_bones.values():
+                if not bone.name.startswith('ORG-') and bone.parent:
+                    self.assertFalse(bone.parent.name.startswith('ORG-'))
+
+    def test_explicit_org_parent_is_honored(self):
+        for role in ('start', 'end'):
+            rigs = pair(role)
+            for name in ('ORG-Face', 'Face', 'DEF-Face'):
+                rigs[0].obj.data.edit_bones[name] = Bone(name, (0, 0, 0), (0, 1, 0))
+            for rig in rigs:
+                prefix = 'gr_chain_bendy_' + ('end_' if role == 'end' else '')
+                setattr(rig.params, prefix + 'override_parent', True)
+                setattr(rig.params, prefix + 'parent', 'ORG-Face')
+            self.generate(rigs)
+            group = rigs[0]._mirror_groups[role]
+            for rig in rigs:
+                self.assertEqual(rig.get_bone(group['anchors'][rig]).parent.name, 'ORG-Face')
+
+    def test_entered_name_is_exact_even_when_def_exists(self):
+        for role in ('start', 'end'):
+            for available, expected in ((('Face', 'DEF-Face'), 'Face'), (('Face',), 'Face')):
+                rigs = pair(role)
+                for name in available:
+                    rigs[0].obj.data.edit_bones[name] = Bone(name, (0, 0, 0), (0, 1, 0))
+                for rig in rigs:
+                    prefix = 'gr_chain_bendy_' + ('end_' if role == 'end' else '')
+                    setattr(rig.params, prefix + 'override_parent', True)
+                    setattr(rig.params, prefix + 'parent', 'Face')
+                self.generate(rigs)
+                group = rigs[0]._mirror_groups[role]
+                for rig in rigs:
+                    self.assertEqual(rig.get_bone(group['anchors'][rig]).parent.name, expected)
+
+    def test_missing_explicit_parent_fails_even_with_other_counterparts(self):
+        for role in ('start', 'end'):
+            for requested in ('Face', 'ORG-Face', 'DEF-Face'):
+                rigs = pair(role)
+                # A different prefix must not substitute for an explicit ORG/DEF request.
+                available = 'ORG-Face' if requested == 'DEF-Face' else 'DEF-Face'
+                rigs[0].obj.data.edit_bones[available] = Bone(available, (0, 0, 0), (0, 1, 0))
+                for rig in rigs:
+                    prefix = 'gr_chain_bendy_' + ('end_' if role == 'end' else '')
+                    setattr(rig.params, prefix + 'override_parent', True)
+                    setattr(rig.params, prefix + 'parent', requested)
+                with self.assertRaisesRegex(ValueError, 'not found'):
+                    self.generate(rigs)
+
     def generate(self, rigs, reverse=False):
         for rig in reversed(rigs) if reverse else rigs:
             rig.generate_bendy_bones()

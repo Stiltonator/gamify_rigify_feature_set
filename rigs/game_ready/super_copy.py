@@ -21,6 +21,7 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
 
     def initialize(self):
         super().initialize()
+        self.make_widget = self.params.gr_sc_make_widget
         self.gr_widget_offset = self.params.gr_sc_widget_offset
         self.gr_widget_scale = self.params.gr_sc_widget_scale
         self.gr_source_parent = self.get_bone_parent(self._single_bone_name(self.bones.org))
@@ -239,9 +240,29 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
                 space='WORLD',
             )
 
+    def generate_widgets(self):
+        # Native super_copy creates a bone-shaped widget even when Widget is
+        # disabled. In Gamify, disabled means Blender's ordinary bone display.
+        if self.make_control:
+            if self.make_widget:
+                super().generate_widgets()
+            else:
+                self.get_bone(self.bones.ctrl).custom_shape = None
+                # Rigify assigns widgets after finalize and can rediscover an
+                # old WGT object by name. Explicitly suppress that fallback.
+                self.generator.new_widget_table[self.bones.ctrl] = None
+
     @classmethod
     def add_parameters(cls, params):
         super().add_parameters(params)
+
+        # Keep this local to Gamify: Rigify's make_widget parameter is shared
+        # with other rig types, whose defaults should remain their own.
+        params.gr_sc_make_widget = BoolProperty(
+            name='Widget', default=False,
+            description='Create the selected custom shape; disable for ordinary bone display',
+            update=tag_view3d_redraw,
+        )
 
         params.gr_sc_override_parent = BoolProperty(
             name='Override Parent', default=False,
@@ -285,14 +306,14 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
                 control_parent_row.prop(params, 'gr_sc_control_parent', text='')
 
         row = layout.split(factor=0.3)
-        row.prop(params, 'make_widget')
+        row.prop(params, 'gr_sc_make_widget')
         row.enabled = params.make_control
 
         widget_row = row.row(align=True)
-        widget_row.enabled = params.make_widget
+        widget_row.enabled = params.gr_sc_make_widget
         layout_widget_dropdown(widget_row, params, 'super_copy_widget_type', text='')
 
-        if params.make_control and params.make_widget:
+        if params.make_control and params.gr_sc_make_widget:
             offset_open = params.gr_sc_widget_offset_expanded
             layout.prop(
                 params, 'gr_sc_widget_offset_expanded',

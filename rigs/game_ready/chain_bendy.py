@@ -36,6 +36,7 @@ from rigify.utils.widgets_basic import (
     create_truncated_cube_widget,
 )
 from rigify.utils.widgets import create_widget
+from .def_parent import resolve_generated_parent
 
 
 WIDGET_ITEMS = [
@@ -625,11 +626,18 @@ class Rig(BaseRig):
         root = self.generator.root_bone
         source_parent = self.get_bone_parent(self.org_chain[0])
 
-        # Resolve the ordinary metarig parent first. An invalid override falls
-        # back to this exact behavior, as if Override Parent were disabled.
+        # Prefer DEF attachments, then the control with the original metarig
+        # name. Never inherit an ORG attachment as a fallback.
         if source_parent and source_parent != root:
-            def_parent = make_deformer_name(strip_org(source_parent))
-            default_parent = def_parent if def_parent in edit_bones else source_parent
+            default_parent = resolve_generated_parent(edit_bones, source_parent)
+            if default_parent is None:
+                default_parent = root
+                if not self.params.gr_chain_bendy_override_parent:
+                    warnings.warn(
+                        f"{self._label(self.org_chain[0])}: no DEF or control counterpart "
+                        f"for parent '{source_parent}'; using '{root}' instead of an ORG bone.",
+                        RuntimeWarning, stacklevel=2,
+                    )
         else:
             default_parent = root
 
@@ -695,6 +703,8 @@ class Rig(BaseRig):
                 else:
                     parent = requested
 
+        if parent and self._target_reaches_owned(parent, owned):
+            self.raise_error("Chain parent '{}' would create a cyclic dependency.", parent)
         self.resolved_parent = parent
         self.rig_parent_bone = parent or root
 

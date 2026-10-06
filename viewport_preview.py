@@ -17,7 +17,7 @@ PREVIEW_CONFIGS = {
         'widget_param': 'super_copy_widget_type',
         'offset': 'gr_sc_widget_offset',
         'scale': 'gr_sc_widget_scale',
-        'enabled': ('make_control', 'make_widget'),
+        'enabled': ('make_control', 'gr_sc_make_widget'),
     },
     'game_ready.spine_unity_humanoid': {
         'groups': (
