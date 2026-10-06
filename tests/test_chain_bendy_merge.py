@@ -5,6 +5,7 @@ and visual B-Bone deformation still require an integration check in Blender.
 """
 import ast
 import math
+import re
 from pathlib import Path
 from types import SimpleNamespace as NS
 import unittest
@@ -82,7 +83,7 @@ for method in rig_class.body:
     if isinstance(method, ast.FunctionDef):
         method.decorator_list = [decorator for decorator in method.decorator_list
                                  if isinstance(decorator, ast.Name)]
-namespace = dict(Vector=Vector, warnings=warnings, strip_org=lambda name: name.removeprefix('ORG-'),
+namespace = dict(Vector=Vector, warnings=warnings, re=re, strip_org=lambda name: name.removeprefix('ORG-'),
                  make_derived_name=lambda name, kind, suffix: kind.upper() + '-' + name + suffix,
                  make_mechanism_name=lambda name: 'MCH-' + name,
                  make_deformer_name=lambda name: 'DEF-' + name)
@@ -153,6 +154,9 @@ def pair(role='start', skip=(False, False), shift=(0, 0, 0)):
         })
         rig.sample_count = 1
         rig.control_shape_size = 0.5
+        rig.shape_scale = 0.1
+        rig.tweak_shape_size = 1.0
+        rig.bbone_segments = 3
         rig.main_widget_type = 'circle'
         rig.bones = NS(ctrl=NS(), mch=NS())
         rig._mirror_groups = {}
@@ -168,6 +172,8 @@ class MirrorMergeTests(unittest.TestCase):
             rig.generate_bendy_bones()
         for rig in reversed(rigs) if reverse else rigs:
             rig.parent_bendy_chain()
+        for rig in rigs:
+            rig.parent_merged_deformers()
 
     def test_endpoint_options_and_generation_order(self):
         for role in ('start', 'end'):
@@ -224,12 +230,36 @@ class MirrorMergeTests(unittest.TestCase):
         self.assertFalse(rigs[0]._mirror_groups)
         self.assertFalse(rigs[1]._mirror_groups)
 
-    def test_asymmetric_geometry_stays_independent(self):
+    def test_asymmetric_geometry_merges_at_coincident_endpoint(self):
+        for role in ('start', 'end'):
+            rigs = pair(role)
+            bone = rigs[0].get_bone(rigs[0].org_chain[-1] if role == 'start' else rigs[0].org_chain[0])
+            if role == 'start':
+                bone.tail += Vector((0, 0.1, 0))
+            else:
+                bone.head += Vector((0, 0.1, 0))
+            with warnings.catch_warnings(record=True) as feedback:
+                self.generate(rigs)
+            self.assertIs(rigs[0]._mirror_groups[role], rigs[1]._mirror_groups[role])
+            self.assertFalse(feedback)
+
+    def test_different_yz_endpoints_stay_independent(self):
         rigs = pair()
-        rigs[0].get_bone(rigs[0].org_chain[-1]).tail += Vector((0, 0.1, 0))
-        with warnings.catch_warnings(record=True):
+        rigs[0].get_bone(rigs[0].org_chain[0]).head += Vector((0, 0.1, 0))
+        with warnings.catch_warnings(record=True) as feedback:
             self.generate(rigs)
         self.assertFalse(rigs[0]._mirror_groups)
+        self.assertTrue(any('Y/Z' in str(item.message) for item in feedback))
+
+    def test_different_chain_lengths_can_merge(self):
+        rigs = pair()
+        rig = rigs[0]
+        last = rig.get_bone(rig.org_chain[-1])
+        name = 'ORG-extra.L'
+        rig.obj.data.edit_bones[name] = Bone(name, last.tail, last.tail + Vector((1, 1, 0)))
+        rig.org_chain.append(name)
+        self.generate(rigs)
+        self.assertIs(rigs[0]._mirror_groups['start'], rigs[1]._mirror_groups['start'])
 
     def test_shared_constraint_and_no_tangent_copy_transform(self):
         for skip in ((False, False), (True, True)):
@@ -275,6 +305,108 @@ class MirrorMergeTests(unittest.TestCase):
         with warnings.catch_warnings(record=True):
             self.generate(rigs + [duplicate])
         self.assertTrue(all(not rig._mirror_groups for rig in rigs + [duplicate]))
+
+    def test_centre_sample_is_unique_and_side_neutral(self):
+        for role in ('start', 'end'):
+            for reverse in (False, True):
+                rigs = pair(role)
+                self.generate(rigs, reverse)
+                group = rigs[0]._mirror_groups[role]
+                intermediary, tweak, deform = group['sample']
+                for name in (intermediary, tweak, deform):
+                    self.assertNotIn('.L', name)
+                    self.assertNotIn('.R', name)
+                for rig in rigs:
+                    self.assertIn(deform, rig._def_chain)
+                    self.assertEqual(len(rig.bones.deform), 4)
+                    self.assertEqual(len(rig.bones.ctrl.tweaks), 4)
+                self.assertEqual(sum(name.startswith('DEF-') for name in rigs[0].obj.data.edit_bones), 9)
+                obj = rigs[0].obj
+                self.assertIs(rigs[0].get_bone(tweak).parent, rigs[0].get_bone(intermediary))
+                obj.pose = NS(bones={name: NS(constraints=Entries()) for name in obj.data.edit_bones})
+                for rig in rigs:
+                    rig.rig_bendy_chain()
+                constraints = obj.pose.bones[deform].constraints
+                self.assertEqual(len(constraints), 1)
+                self.assertEqual(constraints[0].subtarget, tweak)
+                # Walk every hierarchy to detect cross-chain parenting cycles.
+                for bone in obj.data.edit_bones.values():
+                    seen = set()
+                    while bone:
+                        self.assertNotIn(bone.name, seen)
+                        seen.add(bone.name)
+                        bone = bone.parent
+                if role == 'start':
+                    for rig in rigs:
+                        self.assertIs(rig.get_bone(rig._def_chain[1]).parent, rig.get_bone(deform))
+
+    def test_centre_sample_skip_options(self):
+        for role in ('start', 'end'):
+            for skip in ((False, False), (True, False), (False, True), (True, True)):
+                rigs = pair(role)
+                parameter = 'gr_chain_bendy_skip_first_def' if role == 'start' else 'gr_chain_bendy_skip_last_def'
+                for rig, omit in zip(rigs, skip):
+                    setattr(rig.params, parameter, omit)
+                self.generate(rigs)
+                sample = rigs[0]._mirror_groups[role]['sample']
+                self.assertEqual(sample is None, all(skip))
+                if sample:
+                    self.assertTrue(all(sample[2] in rig._def_chain for rig in rigs))
+
+    def test_shape_scale_applies_to_regular_and_merged_widgets(self):
+        for scale in (0.001, 0.1, 100.0):
+            rigs = pair()
+            for rig in rigs:
+                rig.shape_scale = scale
+                rig.control_shape_size = 3.0
+                rig.tweak_shape_size = 1.0
+            self.generate(rigs)
+            obj = rigs[0].obj
+            obj.data.bones = obj.data.edit_bones
+            obj.pose = NS(bones={name: NS() for name in obj.data.bones})
+            for rig in rigs:
+                rig.configure_bendy_chain()
+                for control in rig.bones.ctrl.joints:
+                    self.assertEqual(obj.pose.bones[control].custom_shape_scale_xyz, (6 * scale,) * 3)
+                for tweak in rig.bones.ctrl.tweaks:
+                    self.assertEqual(obj.pose.bones[tweak].custom_shape_scale_xyz, (scale,) * 3)
+            group = rigs[0]._mirror_groups['start']
+            self.assertEqual(obj.pose.bones[group['sample'][1]].custom_shape_scale_xyz, (scale,) * 3)
+
+    def test_short_scarf_names(self):
+        for role in ('start', 'end'):
+            for reverse in (False, True):
+                rigs = pair(role)
+                for rig, side in zip(rigs, ('L', 'R')):
+                    old = rig.org_chain[0]
+                    new = 'ORG-Scarf.' + side
+                    bone = rig.obj.data.edit_bones.pop(old)
+                    bone.name = new
+                    rig.obj.data.edit_bones[new] = bone
+                    rig.org_chain[0] = new
+                self.generate(rigs, reverse)
+                group = rigs[0]._mirror_groups[role]
+                stem = 'Scarf.000' if role == 'start' else 'Scarf.001'
+                self.assertEqual(group['control'], stem)
+                self.assertEqual(group['sample'][1], stem + '.Tweak')
+                self.assertEqual(group['sample'][2], 'DEF-' + stem)
+                for rig, side in zip(rigs, ('L', 'R')):
+                    for name in rig.bones.ctrl.joints:
+                        if name != stem:
+                            self.assertRegex(name, r'^Scarf\.\d{3}\.' + side + '$')
+                    for name in rig.bones.ctrl.tweaks:
+                        self.assertRegex(name, r'^Scarf\.\d{3}\.Tweak\.' + side + '$')
+                    for name in rig.bones.deform:
+                        self.assertRegex(name, r'^DEF-Scarf\.\d{3}\.' + side + '$')
+
+    def test_allocator_skips_existing_bones_without_suffix_after_side(self):
+        rigs = pair()
+        rig = rigs[0]
+        point = Vector((1, 0, 0))
+        rig.obj.data.edit_bones['chain.001.L'] = Bone('chain.001.L', point, point + Vector((0, 1, 0)))
+        name = rig._short_name(point, 1, ('control',))
+        self.assertEqual(name, 'chain.002.L')
+        self.assertEqual(rig._tweak_name(name), 'chain.002.Tweak.L')
 
 
 if __name__ == '__main__':

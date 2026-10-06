@@ -6,6 +6,7 @@ created at the chain joints and at evenly spaced samples inside each B-Bone.
 
 import bpy
 import warnings
+import re
 from mathutils import Vector
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 
@@ -121,6 +122,7 @@ class Rig(BaseRig):
             )
         self.sample_count = self.params.gr_chain_bendy_deformers_per_bbone
         self.bbone_segments = self.params.gr_chain_bendy_bbone_segments
+        self.shape_scale = self.params.gr_chain_bendy_shape_scale
         self.control_shape_size = self.params.gr_chain_bendy_control_shape_size
         self.tweak_shape_size = self.params.gr_chain_bendy_tweak_shape_size
         self.main_widget_type = self.params.gr_chain_bendy_main_widget
@@ -163,24 +165,33 @@ class Rig(BaseRig):
                 matches = []
                 if abs(points[index].x) <= tolerance:
                     for other in enabled:
-                        if other is rig or len(world[other]) != len(points):
+                        if other is rig or abs(world[other][index].x) > tolerance:
                             continue
-                        mirrored = all(
-                            (Vector((-a.x, a.y, a.z)) - b).length <= tolerance
-                            for a, b in zip(points, world[other])
-                        )
-                        # Exclude chains lying entirely in the centre plane.
-                        opposite_sides = any(a.x * b.x < -tolerance ** 2
-                                             for a, b in zip(points, world[other]))
-                        if mirrored and opposite_sides and (points[index] - world[other][index]).length <= tolerance:
+                        # Match the selected seam, not the geometry of the entire
+                        # chains: interior edits and differing bone counts are valid.
+                        ordered = points if role == 'start' else list(reversed(points))
+                        other_ordered = world[other] if role == 'start' else list(reversed(world[other]))
+                        side = next((point.x for point in ordered if abs(point.x) > tolerance), 0.0)
+                        other_side = next((point.x for point in other_ordered if abs(point.x) > tolerance), 0.0)
+                        opposite_sides = side * other_side < 0
+                        if opposite_sides and (points[index] - world[other][index]).length <= tolerance:
                             matches.append(other)
                 candidates[rig] = matches
             for rig in enabled:
                 matches = candidates[rig]
                 if len(matches) != 1 or len(candidates[matches[0]]) != 1:
+                    point = world[rig][index]
+                    if abs(point.x) > tolerance:
+                        reason = f'endpoint world X={point.x:.8g} is outside the centre tolerance {tolerance:g}'
+                    elif not matches:
+                        reason = ('no opted-in opposite-side chain has a coincident endpoint '
+                                  f'at world ({point.x:.8g}, {point.y:.8g}, {point.z:.8g}); '
+                                  'check both merge checkboxes and endpoint Y/Z positions')
+                    else:
+                        reason = 'multiple chains could share this endpoint; the partner is ambiguous'
                     rig._merge_warning(
-                        f"{rig._label(rig.org_chain[0])}: Mirror Merge {role.title()} has no unique "
-                        'mirrored partner at world X=0; the endpoint remains independent.'
+                        f"{rig._label(rig.org_chain[0])}: Mirror Merge {role.title()}: "
+                        + reason + '; the endpoint remains independent.'
                     )
                     continue
                 other = matches[0]
@@ -210,7 +221,9 @@ class Rig(BaseRig):
         if 'frame' not in group:
             group['owner'] = self
             canonical = group['rigs'][0]
-            label = canonical._label(canonical.org_chain[group['index']])
+            label = canonical._centre_label(canonical.org_chain[group['index']])
+            number = 0 if group['role'] == 'start' else 1
+            group['short_name'] = canonical._short_name(point, number, ('control', 'sample'), centre=True)
             suffix = '_bendy_merged_' + group['role']
             frame = self.copy_bone(source_name, make_derived_name(label, 'mch', suffix))
             self._place_bone(frame, point, group['direction'], length, group['roll'])
@@ -219,7 +232,7 @@ class Rig(BaseRig):
                 rig.params, 'gr_chain_bendy_skip_' + group['role'] + '_control')]
             group['control'] = None
             if visible:
-                control = self.copy_bone(source_name, make_derived_name(label, 'ctrl', suffix))
+                control = self.copy_bone(source_name, group['short_name'])
                 self._place_bone(control, point, group['direction'], length, group['roll'])
                 group['control'] = control
                 group['style_rig'] = visible[0]
@@ -228,6 +241,71 @@ class Rig(BaseRig):
         self._place_bone(anchor, point, group['direction'], length, group['roll'])
         group['anchors'][self] = anchor
         return group['control']
+
+    @staticmethod
+    def _centre_label(name):
+        return re.sub(r'\.[LR](?=\.?\d*$)', '', strip_org(name), flags=re.IGNORECASE)
+
+    def _short_name(self, point, number, kinds, centre=False):
+        """Allocate explicit numbering so Blender never appends a suffix after .L/.R."""
+        label = strip_org(self.org_chain[0])
+        match = re.search(r'\.([LR])$', label, re.IGNORECASE)
+        side = '.' + match[1].upper() if match else ''
+        base = label[:match.start()] if match else label
+        base = re.sub(r'\.\d{3}$', '', base)
+        world_x = (self.obj.matrix_world @ point).x
+        if centre or abs(world_x) <= 1.0e-5:
+            side = ''
+        elif not side:
+            side = '.L' if world_x > 0 else '.R'
+        if not hasattr(self.generator, '_gamify_bendy_names'):
+            self.generator._gamify_bendy_names = set()
+        reserved = self.generator._gamify_bendy_names
+        while True:
+            stem = f'{base}.{number:03d}{side}'
+            names = []
+            if 'control' in kinds:
+                names.append(stem)
+            if 'sample' in kinds:
+                names.extend((self._tweak_name(stem), 'DEF-' + stem))
+            if not any(name in reserved or name in self.obj.data.edit_bones for name in names):
+                reserved.update(names)
+                return stem
+            number += 1
+
+    @staticmethod
+    def _tweak_name(stem):
+        # Keep the side suffix last so Blender's standard mirror naming works.
+        match = re.search(r'\.[LR]$', stem)
+        return stem[:match.start()] + '.Tweak' + match[0] if match else stem + '.Tweak'
+
+    def _generate_merged_sample(self, group):
+        """One centre tweak/DEF sample, owned once but referenced by both chains."""
+        if 'sample' in group:
+            return group['sample']
+        skip_param = ('gr_chain_bendy_skip_first_def' if group['role'] == 'start'
+                      else 'gr_chain_bendy_skip_last_def')
+        enabled = [rig for rig in group['rigs'] if not getattr(rig.params, skip_param)]
+        if not enabled:
+            group['sample'] = None
+            return None
+        style = enabled[0]
+        source = style.org_chain[group['index']]
+        label = self._centre_label(source) + '_bendy_merged_' + group['role']
+        point = self.obj.data.edit_bones[group['frame']].head.copy()
+        length = self._bone_length(source)
+        intermediary = self.copy_bone(source, 'MCH-INT-' + label)
+        tweak = self.copy_bone(source, self._tweak_name(group['short_name']))
+        deform = self.copy_bone(source, 'DEF-' + group['short_name'])
+        self._place_bone(intermediary, point, group['direction'], length * 0.12, group['roll'])
+        direction, roll = style._conform_orientation(group['direction'], group['roll'])
+        self._place_bone(tweak, point, direction, length * 0.2, roll)
+        self._place_bone(deform, point, direction, length * 0.12, roll)
+        self.obj.data.edit_bones[deform].use_deform = True
+        group['sample'] = (intermediary, tweak, deform)
+        group['sample_owner'] = self
+        group['sample_style'] = style
+        return group['sample']
 
     @staticmethod
     def _label(name):
@@ -364,10 +442,7 @@ class Rig(BaseRig):
                 or point_role == 'end' and self.params.gr_chain_bendy_skip_end_control
             )
             group = self._mirror_groups.get(point_role)
-            control = None if skip_control or group else self.copy_bone(
-                source_name,
-                make_derived_name(source_label, 'ctrl', '_bendy_' + point_role),
-            )
+            control = None
             tangent = self.copy_bone(
                 source_name,
                 make_mechanism_name(source_label) + '_tangent_' + str(point_index),
@@ -397,6 +472,8 @@ class Rig(BaseRig):
                 roll_axis.normalize()
 
             point_length = self._bone_length(source_name) * 0.25
+            if not skip_control and not group:
+                control = self.copy_bone(source_name, self._short_name(point, point_index, ('control',)))
             if group:
                 control = self._generate_merged_endpoint(group, source_name, point, point_length)
                 direction = group['direction'] if self is group['rigs'][0] else -group['direction']
@@ -441,7 +518,6 @@ class Rig(BaseRig):
         sample_names = []
         tweak_names = []
         deform_names = []
-        deform_name_base = make_deformer_name(self._label(self.org_chain[0]))
         sample_specs = self._sample_specs()
         # Skipping drops the whole sample (MCH-INT, tweak and DEF), since those
         # exist only to drive that DEF. Kept samples keep their original index,
@@ -453,10 +529,22 @@ class Rig(BaseRig):
             else len(sample_specs)
         )
         kept_indices = range(first_kept, end_kept)
-        kept_specs = [sample_specs[index] for index in kept_indices]
+        # Shared endpoint samples are driven by the merged frame, not by either
+        # side's B-Bone sampler. Interior samples remain independent.
+        for group in self._mirror_groups.values():
+            self._generate_merged_sample(group)
+        def_chain = []
+        independent_specs = []
+        if 'start' in self._mirror_groups:
+            sample = self._mirror_groups['start']['sample']
+            if sample:
+                def_chain.append(sample[2])
         for sample_index in kept_indices:
             spec = sample_specs[sample_index]
             point, source_index, t, kind = spec
+            if kind in self._mirror_groups:
+                continue
+            independent_specs.append(spec)
             source_name = self.org_chain[source_index]
             source_label = self._label(source_name)
             int_name = 'MCH-INT-' + source_label + '_sample_' + str(sample_index + 1).zfill(2)
@@ -470,7 +558,8 @@ class Rig(BaseRig):
                 self._bone_length(source_name) * 0.12,
                 roll_axis,
             )
-            tweak_name = 'CTRL-' + source_label + '_tweak_' + str(sample_index + 1).zfill(2)
+            sample_stem = self._short_name(point, sample_index, ('sample',))
+            tweak_name = self._tweak_name(sample_stem)
             # The tweak and its DEF must share one rest orientation, because the
             # DEF copies the tweak's world transform. MCH-INT keeps the chain
             # direction; the tweak's local axes are what the animator sees.
@@ -483,7 +572,7 @@ class Rig(BaseRig):
                 self._bone_length(source_name) * 0.2,
                 sample_roll,
             )
-            def_name = deform_name_base + '.' + str(sample_index).zfill(3)
+            def_name = 'DEF-' + sample_stem
             def_name = self.copy_bone(int_name, def_name)
             self._place_bone(
                 def_name,
@@ -496,6 +585,13 @@ class Rig(BaseRig):
             sample_names.append(int_name)
             tweak_names.append(tweak_name)
             deform_names.append(def_name)
+            def_chain.append(def_name)
+
+        if 'end' in self._mirror_groups:
+            sample = self._mirror_groups['end']['sample']
+            if sample:
+                def_chain.append(sample[2])
+        self._def_chain = def_chain
 
         self.bones.ctrl.joints = controls
         # Keep endpoint slots even when their animator-facing controls are omitted.
@@ -510,7 +606,7 @@ class Rig(BaseRig):
         # Map each intermediary to its nearest B-Bone driver(s). A joint is
         # intentionally shared 50/50 by the two adjacent drivers.
         targets = []
-        for spec in kept_specs:
+        for spec in independent_specs:
             _, segment_index, t, kind = spec
             if kind == 'joint' and segment_index + 1 < len(bbone_drivers):
                 targets.append(((bbone_drivers[segment_index], 0.5),
@@ -520,7 +616,7 @@ class Rig(BaseRig):
         self._intermediary_targets = targets
         self._intermediary_curve_targets = [
             (bbone_drivers[segment_index], t)
-            for _, segment_index, t, _ in kept_specs
+            for _, segment_index, t, _ in independent_specs
         ]
 
     @stage.parent_bones
@@ -550,6 +646,8 @@ class Rig(BaseRig):
             owned.update(group['anchors'].values())
             if group['control']:
                 owned.add(group['control'])
+            if group['sample']:
+                owned.update(group['sample'])
 
         parent = default_parent
         if self.params.gr_chain_bendy_override_parent:
@@ -679,6 +777,10 @@ class Rig(BaseRig):
                                   for rig, target in group['parents'].items())
                 self._merge_warning(f'Mirror Merge {role.title()} has different parent targets ({names}); '
                                     'both parents contribute equally to the shared endpoint.')
+            if group.get('sample_owner') is self:
+                intermediary, tweak, deform = group['sample']
+                self.set_bone_parent(intermediary, group['control'] or group['frame'], use_connect=False)
+                self.set_bone_parent(tweak, intermediary, use_connect=False)
 
         for tweak, intermediary in zip(
             self.bones.ctrl.tweaks, self.bones.mch.intermediary
@@ -693,9 +795,12 @@ class Rig(BaseRig):
             self.set_bone_parent(name, pivot, use_connect=False)
 
         parent_defs_in_sequence = self.params.gr_chain_bendy_parent_def_sequence
-        for index, deform in enumerate(self.bones.deform):
+        shared_defs = {group['sample'][2] for group in self._mirror_groups.values() if group['sample']}
+        for index, deform in enumerate(self._def_chain):
+            if deform in shared_defs:
+                continue
             deform_parent = (
-                self.bones.deform[index - 1]
+                self._def_chain[index - 1]
                 if parent_defs_in_sequence and index > 0
                 else parent
             )
@@ -707,10 +812,34 @@ class Rig(BaseRig):
             for name in self.bones.ctrl.joints:
                 self.generator.disable_auto_parent(name)
 
+    @stage.apply_bones
+    def parent_merged_deformers(self):
+        # All chains have resolved their parents by this stage. A shared DEF can
+        # have only one hierarchy parent: use the first enabled side by name.
+        for group in self._mirror_groups.values():
+            if group.get('sample_owner') is not self:
+                continue
+            style = group['sample_style']
+            deform = group['sample'][2]
+            index = style._def_chain.index(deform)
+            parent = (style._def_chain[index - 1]
+                      if style.params.gr_chain_bendy_parent_def_sequence and index > 0
+                      else style.resolved_parent)
+            self.set_bone_parent(deform, parent, use_connect=False)
+            if parent is None:
+                self.generator.disable_auto_parent(deform)
+
     @stage.configure_bones
     def configure_bendy_chain(self):
         data_bones = self.obj.data.bones
         pose_bones = self.obj.pose.bones
+        for group in self._mirror_groups.values():
+            if group.get('sample_owner') is self:
+                tweak = pose_bones[group['sample'][1]]
+                tweak.use_custom_shape_bone_size = False
+                style = group['sample_style']
+                tweak.custom_shape_scale_xyz = (style.tweak_shape_size * style.shape_scale,) * 3
+                data_bones[group['sample'][2]].bbone_segments = 1
 
         for index, driver_name in enumerate(self.bones.mch.bbone_drivers):
             driver = data_bones[driver_name]
@@ -729,22 +858,22 @@ class Rig(BaseRig):
         pivot_pose.lock_rotation_w = True
         pivot_pose.lock_scale = (True, True, True)
 
-        # The main widget mesh has a fixed 0.5 radius. Scale relative to the
-        # default setting so the current default appearance is preserved.
+        # The main widget mesh has a fixed 0.5 radius. Convert the scaled main
+        # shape size to a widget multiplier.
         # Disable bone-length scaling so equal settings look equal on every chain.
         for control in self.bones.ctrl.joints:
             control_pose = pose_bones[control]
             control_pose.use_custom_shape_bone_size = False
             style = next((group['style_rig'] for group in self._mirror_groups.values()
                           if group['control'] == control), self)
-            control_pose.custom_shape_scale_xyz = (style.control_shape_size / 0.5,) * 3
+            control_pose.custom_shape_scale_xyz = (style.control_shape_size * style.shape_scale / 0.5,) * 3
 
         for tweak in self.bones.ctrl.tweaks:
             # Tweak shape size is an explicit widget size, independent of the
             # (short) tweak bone length.
             tweak_pose = pose_bones[tweak]
             tweak_pose.use_custom_shape_bone_size = False
-            tweak_pose.custom_shape_scale_xyz = (self.tweak_shape_size,) * 3
+            tweak_pose.custom_shape_scale_xyz = (self.tweak_shape_size * self.shape_scale,) * 3
 
     def create_selected_widget(self, bone_name, widget_type):
         old_widget = self.generator.old_widget_table.get(bone_name)
@@ -781,6 +910,8 @@ class Rig(BaseRig):
         # Main controls retain the tangent orientation regardless of the sample
         # orientation override, so use the same driving constraints in both cases.
         for group in self._mirror_groups.values():
+            if group.get('sample_owner') is self:
+                self.make_constraint(group['sample'][2], 'COPY_TRANSFORMS', group['sample'][1])
             if group['owner'] is self:
                 constraint = self.obj.pose.bones[group['frame']].constraints.new('ARMATURE')
                 constraint.name = 'Mirror Merge Parent Blend'
@@ -833,6 +964,9 @@ class Rig(BaseRig):
 
     @stage.generate_widgets
     def generate_bendy_widgets(self):
+        for group in self._mirror_groups.values():
+            if group.get('sample_owner') is self:
+                self.create_selected_widget(group['sample'][1], group['sample_style'].tweak_widget_type)
         for control in self.bones.ctrl.joints:
             style = next((group['style_rig'] for group in self._mirror_groups.values()
                           if group['control'] == control), self)
@@ -860,19 +994,33 @@ class Rig(BaseRig):
             min=1,
             max=32,
         )
+        params.gr_chain_bendy_shape_scale = FloatProperty(
+            name='Shape Scale',
+            description='Global multiplier for main and tweak widget sizes',
+            default=0.1,
+            min=0.001,
+            max=100.0,
+            precision=3,
+        )
         params.gr_chain_bendy_control_shape_size = FloatProperty(
             name='Main Shape Size',
-            description='Radius of the start, end, and joint control widgets',
-            default=0.5,
+            description='Main widget radius before applying Shape Scale',
+            default=3.0,
             min=0.001,
-            max=50.0,
+            max=100.0,
+            soft_min=0.01,
+            soft_max=10.0,
+            precision=3,
         )
         params.gr_chain_bendy_tweak_shape_size = FloatProperty(
             name='Tweak Shape Size',
-            description='Size multiplier for the directional tweak widgets',
-            default=0.25,
+            description='Tweak widget size multiplier before applying Shape Scale',
+            default=1.0,
             min=0.001,
-            max=5.0,
+            max=100.0,
+            soft_min=0.01,
+            soft_max=10.0,
+            precision=3,
         )
         params.gr_chain_bendy_main_widget = EnumProperty(
             name='Main Widget',
@@ -956,8 +1104,9 @@ class Rig(BaseRig):
         layout.prop(params, 'gr_chain_bendy_deformers_per_bbone')
         layout.prop(params, 'gr_chain_bendy_parent_def_sequence')
         layout.separator()
-        layout.prop(params, 'gr_chain_bendy_control_shape_size')
-        layout.prop(params, 'gr_chain_bendy_tweak_shape_size')
+        layout.prop(params, 'gr_chain_bendy_shape_scale')
+        layout.prop(params, 'gr_chain_bendy_control_shape_size', slider=True)
+        layout.prop(params, 'gr_chain_bendy_tweak_shape_size', slider=True)
         layout.prop(params, 'gr_chain_bendy_main_widget', text='Main Widget')
         layout.prop(params, 'gr_chain_bendy_tweak_widget', text='Tweak Widget')
         for role in ('start', 'end'):
