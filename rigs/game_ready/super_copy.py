@@ -9,7 +9,7 @@ from rigify.rigs.basic.super_copy import Rig as NativeSuperCopyRig
 from rigify.utils import make_deformer_name, strip_org
 from rigify.utils.widgets import layout_widget_dropdown
 from ...viewport_preview import tag_view3d_redraw
-from .def_parent import DefParentMixin
+from .def_parent import DefParentMixin, resolve_generated_parent
 from .custom_shapes import copy_custom_shape
 
 
@@ -138,15 +138,15 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
             else:
                 parent = requested
         else:
-            # Prefer the generated DEF counterpart of the metarig parent. If it
-            # does not exist, retain the parent chosen by basic.super_copy.
+            # Automatic control parenting: DEF, original-name bone, then ORG
+            # via native parenting. Explicit overrides above bypass this policy.
             native_parent = edit_bones[control_name].parent
             parent = native_parent.name if native_parent else None
             source = self.gr_source_parent
             if source and source != root:
-                def_parent = source if source.startswith('DEF-') else make_deformer_name(strip_org(source))
-                if def_parent in edit_bones:
-                    parent = def_parent
+                preferred = resolve_generated_parent(edit_bones, source)
+                if preferred is not None:
+                    parent = preferred
 
         self.gr_control_parent = parent
         self._gr_control_parent_resolved = True

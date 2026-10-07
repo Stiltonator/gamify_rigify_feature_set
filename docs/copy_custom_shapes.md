@@ -7,6 +7,11 @@ custom-shape transform settings. Without a source shape, the control uses
 ordinary bone display. Enabling Widget still creates the selected widget and
 uses Gamify's widget offset/scale settings.
 
+Automatic `super_copy` control parenting prefers the metarig parent's generated
+DEF bone, then the bone with its original metarig name, then native ORG parenting.
+An enabled control **Override Parent** bypasses this preference and uses the
+explicit entered target (including an ORG bone), or `NONE` for no parent.
+
 `game_ready.raw_copy` preserves the original bone name and native raw-copy
 constraint/parent relinking options. It carries the source custom shape and its
 display settings into the generated rig unless an optional widget is selected.

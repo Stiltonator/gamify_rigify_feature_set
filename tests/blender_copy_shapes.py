@@ -71,3 +71,48 @@ rig = meta.data.rigify_target_rig
 assert rig.pose.bones['Copy'].custom_shape is None
 assert rig.pose.bones['Raw'].custom_shape is None
 print('COPY_SHAPES_OK')
+
+# Automatic priority and explicit control overrides are independent of DEF settings.
+for make_control, make_deform, override, expected in (
+        (True, True, None, 'DEF-Face'),
+        (True, False, None, 'Face'),
+        (False, False, None, 'ORG-Face'),
+        (True, True, 'Face', 'Face'),
+        (True, True, 'ORG-Face', 'ORG-Face'),
+        (True, True, 'NONE', None)):
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.delete(use_global=False)
+    bpy.ops.object.armature_add()
+    meta = bpy.context.object
+    bpy.ops.object.mode_set(mode='EDIT')
+    face = meta.data.edit_bones[0]
+    face.name = 'Face'
+    mouth = meta.data.edit_bones.new('Mouth')
+    mouth.head, mouth.tail = (0, 1, 0), (0, 2, 0)
+    mouth.parent = face
+    bpy.ops.object.mode_set(mode='OBJECT')
+    for bone in meta.pose.bones:
+        bone.rigify_type = 'game_ready.super_copy'
+    params = meta.pose.bones['Face'].rigify_parameters
+    params.make_control, params.make_deform = make_control, make_deform
+    params = meta.pose.bones['Mouth'].rigify_parameters
+    params.make_deform = False
+    if override is not None:
+        params.gr_sc_control_override_parent = True
+        params.gr_sc_control_parent = override
+    collection = meta.data.collections.new('Controls')
+    collection.rigify_ui_row = 1
+    for bone in meta.data.bones:
+        collection.assign(bone)
+    for generation in range(2):
+        assert 'FINISHED' in bpy.ops.pose.rigify_generate()
+        rig = meta.data.rigify_target_rig
+        parent = rig.pose.bones['Mouth'].parent
+        assert (parent.name if parent else None) == expected
+        bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.select_all(action='DESELECT')
+        meta.hide_set(False)
+        meta.select_set(True)
+        bpy.context.view_layer.objects.active = meta
+print('SUPER_COPY_CONTROL_PARENT_PRIORITY_OK')
