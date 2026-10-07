@@ -31,6 +31,10 @@ class VIEW3D_MT_gamify_menu(bpy.types.Menu):
             layout.prop(context.scene, 'gamify_preview_all_gizmos', text="Preview All Gizmos")
             layout.prop(context.scene, 'gamify_gizmos_draw_in_front', text="Gizmos Draw In Front")
 
+        layout.separator()
+        layout.prop(context.scene, 'gamify_remember_weight_accumulate',
+                    text="Remember Weight-Brush Accumulate Setting")
+
 
 def _is_valid_rigify_metarig(context, obj):
     """Use Rigify's own metarig validation for the menu enabled state."""
@@ -48,7 +52,8 @@ def _is_valid_rigify_metarig(context, obj):
 
 def _draw_gamify_header(self, context):
     obj = context.active_object
-    if obj and obj.type == 'ARMATURE' and obj.mode in {'OBJECT', 'EDIT', 'POSE'}:
+    if obj and ((obj.type == 'ARMATURE' and obj.mode in {'OBJECT', 'EDIT', 'POSE'})
+                or (obj.type == 'MESH' and obj.mode in {'OBJECT', 'WEIGHT_PAINT'})):
         self.layout.menu(VIEW3D_MT_gamify_menu.bl_idname, text="Gamify")
 
 
