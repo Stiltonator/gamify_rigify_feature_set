@@ -25,9 +25,10 @@ class Rig(DefParentMixin, NativeSuperFingerRig):
         self.set_bone_parent(self.bones.ctrl.master, self.rig_parent_bone, use_connect=False)
 
     def rig_deform_bone(self, i, deform, org):
-        # The native super_finger deform chain uses Copy Transforms only. Its
-        # Stretch-To constraints are confined to the MCH driver chain for IK.
-        self.make_constraint(deform, 'COPY_TRANSFORMS', org)
+        # Follow position and rotation without copying source scale. Stretch-To
+        # constraints remain confined to the MCH driver chain for IK.
+        self.make_constraint(deform, 'COPY_LOCATION', org)
+        self.make_constraint(deform, 'COPY_ROTATION', org)
 
     @classmethod
     def add_parameters(cls, params):

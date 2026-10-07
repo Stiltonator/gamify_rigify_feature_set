@@ -44,7 +44,8 @@ class Rig(DefParentMixin, NativeArmRig):
             self.generator.disable_auto_parent(deform[0])
 
     def rig_deform_bone(self, i, deform, entry, next_entry, tweak, next_tweak):
-        self.make_constraint(deform, 'COPY_TRANSFORMS', tweak or entry.org)
+        self.make_constraint(deform, 'COPY_LOCATION', tweak or entry.org)
+        self.make_constraint(deform, 'COPY_ROTATION', tweak or entry.org)
         target = next_tweak or (next_entry.org if next_entry else None)
         if target:
             self.make_constraint(deform, 'DAMPED_TRACK', target, track_axis='TRACK_Y')

@@ -1,0 +1,64 @@
+"""Run with Blender --background --factory-startup --python-exit-code 1."""
+import sys
+from pathlib import Path
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import bpy
+bpy.ops.preferences.addon_enable(module='rigify')
+import rigify
+from rigify import rig_lists
+from rigify.rigs.limbs import arm as native_arm, super_finger as native_finger
+from gamify.rigs.game_ready import arm, finger
+for name, module in (('arm', arm), ('finger', finger)):
+    rig_lists.rigs['game_ready.' + name] = {'module': module, 'feature_set': 'rigify'}
+rigify.register_rig_parameters()
+
+for name, native in (('arm', native_arm), ('finger', native_finger)):
+    for variant in (1, 2):
+        if bpy.context.object:
+            bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.select_all(action='SELECT')
+        bpy.ops.object.delete(use_global=False)
+        bpy.ops.object.armature_add()
+        meta = bpy.context.object
+        bpy.ops.object.mode_set(mode='EDIT')
+        for bone in list(meta.data.edit_bones):
+            meta.data.edit_bones.remove(bone)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        native.create_sample(meta)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        if name == 'finger':
+            # Native sample includes an untyped palm; test a standalone finger.
+            first = next(bone.name for bone in meta.pose.bones if bone.rigify_type)
+            bpy.ops.object.mode_set(mode='EDIT')
+            meta.data.edit_bones[first].use_connect = False
+            meta.data.edit_bones[first].parent = None
+            bpy.ops.object.mode_set(mode='OBJECT')
+        collection = meta.data.collections.new('Controls')
+        collection.rigify_ui_row = 1
+        for bone in meta.pose.bones:
+            if bone.rigify_type:
+                bone.rigify_type = 'game_ready.' + name
+                if name == 'arm':
+                    bone.rigify_parameters.segments = variant
+                else:
+                    bone.rigify_parameters.make_extra_ik_control = variant == 2
+            collection.assign(bone.bone)
+        for generation in range(2):
+            assert 'FINISHED' in bpy.ops.pose.rigify_generate()
+            target = meta.data.rigify_target_rig
+            defs = [bone for bone in target.pose.bones if bone.name.startswith('DEF-')]
+            assert defs
+            for bone in defs:
+                assert [con.type for con in bone.constraints[:2]] == ['COPY_LOCATION', 'COPY_ROTATION']
+                first, second = bone.constraints[:2]
+                assert first.target == second.target == target
+                assert first.subtarget == second.subtarget
+                assert not any(con.type in {'COPY_TRANSFORMS', 'STRETCH_TO'} for con in bone.constraints)
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.select_all(action='DESELECT')
+            meta.hide_set(False)
+            meta.select_set(True)
+            bpy.context.view_layer.objects.active = meta
+print('ARM_AND_FINGER_DEF_CONSTRAINTS_OK')
