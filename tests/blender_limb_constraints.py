@@ -9,8 +9,8 @@ bpy.ops.preferences.addon_enable(module='rigify')
 import rigify
 from rigify import rig_lists
 from rigify.rigs.limbs import arm as native_arm, super_finger as native_finger
-from gamify.rigs.game_ready import arm, finger
-for name, module in (('arm', arm), ('finger', finger)):
+from gamify.rigs.game_ready import arm_unity_humanoid as arm, finger
+for name, module in (('arm_unity_humanoid', arm), ('finger', finger)):
     rig_lists.rigs['game_ready.' + name] = {'module': module, 'feature_set': 'rigify'}
 rigify.register_rig_parameters()
 
@@ -39,7 +39,7 @@ for name, native in (('arm', native_arm), ('finger', native_finger)):
         collection.rigify_ui_row = 1
         for bone in meta.pose.bones:
             if bone.rigify_type:
-                bone.rigify_type = 'game_ready.' + name
+                bone.rigify_type = 'game_ready.arm_unity_humanoid' if name == 'arm' else 'game_ready.finger'
                 if name == 'arm':
                     bone.rigify_parameters.segments = variant
                 else:
@@ -48,6 +48,15 @@ for name, native in (('arm', native_arm), ('finger', native_finger)):
         for generation in range(2):
             assert 'FINISHED' in bpy.ops.pose.rigify_generate()
             target = meta.data.rigify_target_rig
+            if name == 'arm':
+                ik_constraints = [con for bone in target.pose.bones for con in bone.constraints if con.type == 'IK']
+                assert len(ik_constraints) == 2
+                assert all(not con.use_stretch for con in ik_constraints)
+                assert all('IK_Stretch' not in bone for bone in target.pose.bones)
+                assert not any('IK_Stretch' in var.targets[0].data_path
+                               for driver in target.animation_data.drivers for var in driver.driver.variables)
+                ui_text = '\n'.join(text.as_string() for text in bpy.data.texts)
+                assert 'IK_Stretch' not in ui_text
             defs = [bone for bone in target.pose.bones if bone.name.startswith('DEF-')]
             assert defs
             for bone in defs:
