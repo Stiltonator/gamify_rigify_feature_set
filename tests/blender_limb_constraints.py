@@ -8,13 +8,13 @@ import bpy
 bpy.ops.preferences.addon_enable(module='rigify')
 import rigify
 from rigify import rig_lists
-from rigify.rigs.limbs import arm as native_arm, super_finger as native_finger
-from gamify.rigs.game_ready import arm_unity_humanoid as arm, finger
-for name, module in (('arm_unity_humanoid', arm), ('finger', finger)):
+from rigify.rigs.limbs import arm as native_arm, super_finger as native_finger, leg as native_leg
+from gamify.rigs.game_ready import arm_unity_humanoid as arm, finger, leg_unity_humanoid as leg
+for name, module in (('arm_unity_humanoid', arm), ('finger', finger), ('leg_unity_humanoid', leg)):
     rig_lists.rigs['game_ready.' + name] = {'module': module, 'feature_set': 'rigify'}
 rigify.register_rig_parameters()
 
-for name, native in (('arm', native_arm), ('finger', native_finger)):
+for name, native in (('arm', native_arm), ('finger', native_finger), ('leg', native_leg)):
     for variant in (1, 2):
         if bpy.context.object:
             bpy.ops.object.mode_set(mode='OBJECT')
@@ -39,16 +39,21 @@ for name, native in (('arm', native_arm), ('finger', native_finger)):
         collection.rigify_ui_row = 1
         for bone in meta.pose.bones:
             if bone.rigify_type:
-                bone.rigify_type = 'game_ready.arm_unity_humanoid' if name == 'arm' else 'game_ready.finger'
-                if name == 'arm':
+                bone.rigify_type = 'game_ready.finger' if name == 'finger' else 'game_ready.' + name + '_unity_humanoid'
+                if name in {'arm', 'leg'}:
                     bone.rigify_parameters.segments = variant
+                    if name == 'leg':
+                        bone.rigify_parameters.gr_toes_override_parent = True
+                        bone.rigify_parameters.gr_toes_parent = 'root'
+                        bone.rigify_parameters.extra_ik_toe = variant == 2
+                        bone.rigify_parameters.extra_toe_roll = variant == 2
                 else:
                     bone.rigify_parameters.make_extra_ik_control = variant == 2
             collection.assign(bone.bone)
         for generation in range(2):
             assert 'FINISHED' in bpy.ops.pose.rigify_generate()
             target = meta.data.rigify_target_rig
-            if name == 'arm':
+            if name in {'arm', 'leg'}:
                 ik_constraints = [con for bone in target.pose.bones for con in bone.constraints if con.type == 'IK']
                 assert len(ik_constraints) == 2
                 assert all(not con.use_stretch for con in ik_constraints)
@@ -70,4 +75,4 @@ for name, native in (('arm', native_arm), ('finger', native_finger)):
             meta.hide_set(False)
             meta.select_set(True)
             bpy.context.view_layer.objects.active = meta
-print('ARM_AND_FINGER_DEF_CONSTRAINTS_OK')
+print('ARM_FINGER_AND_LEG_DEF_CONSTRAINTS_OK')

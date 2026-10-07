@@ -265,7 +265,7 @@ def create(obj):  # noqa
     except AttributeError:
         pass
     pbone = obj.pose.bones[bones['upper_arm.L']]
-    pbone.rigify_type = 'game_ready.arm'
+    pbone.rigify_type = 'game_ready.arm_unity_humanoid'
     pbone.lock_location = (False, False, False)
     pbone.lock_rotation = (False, False, False)
     pbone.lock_rotation_w = False
@@ -283,7 +283,7 @@ def create(obj):  # noqa
     except AttributeError:
         pass
     pbone = obj.pose.bones[bones['upper_arm.R']]
-    pbone.rigify_type = 'game_ready.arm'
+    pbone.rigify_type = 'game_ready.arm_unity_humanoid'
     pbone.lock_location = (False, False, False)
     pbone.lock_rotation = (False, False, False)
     pbone.lock_rotation_w = False
@@ -301,7 +301,7 @@ def create(obj):  # noqa
     except AttributeError:
         pass
     pbone = obj.pose.bones[bones['thigh.L']]
-    pbone.rigify_type = 'game_ready.leg_toes'
+    pbone.rigify_type = 'game_ready.leg_unity_humanoid'
     pbone.lock_location = (False, False, False)
     pbone.lock_rotation = (False, False, False)
     pbone.lock_rotation_w = False
@@ -347,7 +347,7 @@ def create(obj):  # noqa
     except AttributeError:
         pass
     pbone = obj.pose.bones[bones['thigh.R']]
-    pbone.rigify_type = 'game_ready.leg_toes'
+    pbone.rigify_type = 'game_ready.leg_unity_humanoid'
     pbone.lock_location = (False, False, False)
     pbone.lock_rotation = (False, False, False)
     pbone.lock_rotation_w = False

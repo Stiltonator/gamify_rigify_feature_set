@@ -62,7 +62,7 @@ PREVIEW_CONFIGS = {
             },
         ),
     },
-    'game_ready.leg_toes': {'generator': 'leg_toes'},
+    'game_ready.leg_unity_humanoid': {'generator': 'leg_toes'},
     'game_ready.finger': {'generator': 'finger'},
     'game_ready.super_chain': {'generator': 'super_chain'},
 }

@@ -8,6 +8,7 @@ from bpy.props import BoolProperty, StringProperty
 from rigify.base_rig import stage
 from rigify.rigs.limbs.leg import Rig as NativeLegRig, create_sample as native_create_sample
 from rigify.utils.layers import ControlLayersOption
+from rigify.utils.naming import strip_org
 
 from .def_parent import DefParentMixin
 
@@ -40,12 +41,40 @@ class Rig(DefParentMixin, NativeLegRig):
         # isolation slider, which could otherwise override this requirement.
         pass
 
-    ### Added this to make leg pole target visible on generation
+    @stage.configure_bones
+    def configure_ik_mch_chain(self):
+        super().configure_ik_mch_chain()
+        for name in (self.get_ik_chain_base(), self.bones.mch.ik_end):
+            self.get_bone(name).ik_stretch = 0.0
+
     @stage.configure_bones
     def configure_ik_mch_panel(self):
-        super().configure_ik_mch_panel()
-        self.obj.pose.bones[self.prop_bone]['pole_vector'] = True
+        ctrl = self.bones.ctrl
+        panel = self.script.panel_with_selected_check(self, ctrl.flatten())
+        rig_name = strip_org(self.bones.org.main[2])
+        self.make_property(self.prop_bone, 'IK_FK', default=0.0, description='IK/FK Switch')
+        panel.custom_prop(self.prop_bone, 'IK_FK', text='IK-FK ({})'.format(rig_name), slider=True)
+        self.add_global_buttons(panel, rig_name)
+        panel = self.script.panel_with_selected_check(self, [ctrl.master, *self.get_all_ik_controls()])
+        self.make_property(self.prop_bone, 'pole_vector', default=True,
+                           description='Use a pole target control')
+        self.add_ik_only_buttons(panel, rig_name)
 
+    def rig_ik_mch_stretch_limit(self, mch_target, base_bone, input_bone,
+                                 head_tail, org_count, bias=1.035):
+        # Retain a fixed reach limit without an IK_Stretch property or driver.
+        length = sum(self.get_bone(org).length for org in self.bones.org.main[:org_count])
+        self.make_constraint(mch_target, 'COPY_LOCATION', input_bone, head_tail=head_tail)
+        self.make_constraint(
+            mch_target, 'LIMIT_DISTANCE', base_bone,
+            limit_mode='LIMITDIST_INSIDE', distance=length * bias,
+            space='CUSTOM', space_object=self.obj, space_subtarget=self.bones.mch.follow)
+
+    def rig_ik_mch_end_bone(self, mch_ik, mch_target, ctrl_pole, chain=2):
+        super().rig_ik_mch_end_bone(mch_ik, mch_target, ctrl_pole, chain=chain)
+        for constraint in self.get_bone(mch_ik).constraints:
+            if constraint.type == 'IK':
+                constraint.use_stretch = False
 
     @stage.rig_bones
     def rig_mch_follow_bone(self):
@@ -113,7 +142,8 @@ class Rig(DefParentMixin, NativeLegRig):
     def rig_deform_bone(self, i, deform, entry, next_entry, tweak, next_tweak):
         # Preserve the native pose source and constraint order. Replace each
         # native Stretch-To with rotation-only tracking of the same target.
-        self.make_constraint(deform, 'COPY_TRANSFORMS', tweak or entry.org)
+        self.make_constraint(deform, 'COPY_LOCATION', tweak or entry.org)
+        self.make_constraint(deform, 'COPY_ROTATION', tweak or entry.org)
         if tweak:
             target = next_tweak or (next_entry.org if next_entry else None)
             if target:
@@ -194,7 +224,7 @@ def create_sample(obj):
     """Use the native sample geometry, tagged for this adapter."""
     bones = native_create_sample(obj)
     thigh = obj.pose.bones[bones['thigh.L']]
-    thigh.rigify_type = 'game_ready.leg_toes'
+    thigh.rigify_type = 'game_ready.leg_unity_humanoid'
     thigh.rigify_parameters.extra_ik_toe = True
     thigh.rigify_parameters.extra_toe_roll = True
     # Sample defaults: one DEF per input chain bone, retaining all native
