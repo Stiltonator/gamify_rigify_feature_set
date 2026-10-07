@@ -10,6 +10,7 @@ from rigify.utils import make_deformer_name, strip_org
 from rigify.utils.widgets import layout_widget_dropdown
 from ...viewport_preview import tag_view3d_redraw
 from .def_parent import DefParentMixin
+from .custom_shapes import copy_custom_shape
 
 
 class Rig(DefParentMixin, NativeSuperCopyRig):
@@ -241,16 +242,13 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
             )
 
     def generate_widgets(self):
-        # Native super_copy creates a bone-shaped widget even when Widget is
-        # disabled. In Gamify, disabled means Blender's ordinary bone display.
+        # Widget disabled preserves the metarig custom shape, if one exists.
         if self.make_control:
             if self.make_widget:
                 super().generate_widgets()
             else:
-                self.get_bone(self.bones.ctrl).custom_shape = None
-                # Rigify assigns widgets after finalize and can rediscover an
-                # old WGT object by name. Explicitly suppress that fallback.
-                self.generator.new_widget_table[self.bones.ctrl] = None
+                source = self.generator.metarig.pose.bones[strip_org(self.bones.org)]
+                copy_custom_shape(self, source, self.bones.ctrl)
 
     @classmethod
     def add_parameters(cls, params):
@@ -260,7 +258,7 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
         # with other rig types, whose defaults should remain their own.
         params.gr_sc_make_widget = BoolProperty(
             name='Widget', default=False,
-            description='Create the selected custom shape; disable for ordinary bone display',
+            description='Create the selected widget; disable to preserve the metarig custom shape, or ordinary bone display when no shape is assigned',
             update=tag_view3d_redraw,
         )
 
