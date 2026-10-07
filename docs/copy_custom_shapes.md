@@ -13,10 +13,12 @@ than reused with stale geometry. Matching Gamify widgets can still be reused.
 The widget-type dropdown remains shared with native super-copy, so its selection
 can persist when switching rig types; Gamify's Widget checkbox is separate.
 
-Automatic `super_copy` control parenting prefers the metarig parent's generated
+Automatic `super_copy` control and DEF parenting prefer the metarig parent's generated
 DEF bone, then the bone with its original metarig name, then native ORG parenting.
 An enabled control **Override Parent** bypasses this preference and uses the
 explicit entered target (including an ORG bone), or `NONE` for no parent.
+The DEF override likewise bypasses automatic preferences. Its existing empty
+or missing-target behavior remains a warning followed by root parenting.
 
 `game_ready.raw_copy` preserves the original bone name and native raw-copy
 constraint/parent relinking options. It carries the source custom shape and its

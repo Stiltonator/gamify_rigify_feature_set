@@ -79,7 +79,9 @@ for make_control, make_deform, override, expected in (
         (False, False, None, 'ORG-Face'),
         (True, True, 'Face', 'Face'),
         (True, True, 'ORG-Face', 'ORG-Face'),
-        (True, True, 'NONE', None)):
+        (True, True, 'NONE', None),
+        (True, True, 'DoesNotExist', None),
+        (True, True, '', None)):
     bpy.ops.object.mode_set(mode='OBJECT')
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False)
@@ -97,10 +99,12 @@ for make_control, make_deform, override, expected in (
     params = meta.pose.bones['Face'].rigify_parameters
     params.make_control, params.make_deform = make_control, make_deform
     params = meta.pose.bones['Mouth'].rigify_parameters
-    params.make_deform = False
+    params.make_deform = True
     if override is not None:
         params.gr_sc_control_override_parent = True
         params.gr_sc_control_parent = override
+        params.gr_sc_override_parent = True
+        params.gr_sc_def_parent = override
     collection = meta.data.collections.new('Controls')
     collection.rigify_ui_row = 1
     for bone in meta.data.bones:
@@ -110,12 +114,15 @@ for make_control, make_deform, override, expected in (
         rig = meta.data.rigify_target_rig
         parent = rig.pose.bones['Mouth'].parent
         assert (parent.name if parent else None) == expected
+        deform_parent = rig.pose.bones['DEF-Mouth'].parent
+        def_expected = 'root' if override in ('', 'DoesNotExist') else expected
+        assert (deform_parent.name if deform_parent else None) == def_expected
         bpy.ops.object.mode_set(mode='OBJECT')
         bpy.ops.object.select_all(action='DESELECT')
         meta.hide_set(False)
         meta.select_set(True)
         bpy.context.view_layer.objects.active = meta
-print('SUPER_COPY_CONTROL_PARENT_PRIORITY_OK')
+print('SUPER_COPY_CONTROL_AND_DEF_PARENT_PRIORITY_OK')
 
 # Vanilla -> Gamify must rebuild the widget to match the displayed selection.
 params = meta.pose.bones['Mouth'].rigify_parameters

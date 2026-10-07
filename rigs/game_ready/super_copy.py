@@ -69,15 +69,10 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
                 parent = requested
         elif self.gr_source_parent and self.gr_source_parent != root:
             source = self.gr_source_parent
-            parent = source if source.startswith('DEF-') else make_deformer_name(strip_org(source))
-            if parent not in edit_bones:
-                warnings.warn(
-                    f"Metarig parent '{source}' has no generated DEF bone. "
-                    "The DEF bone will use the rig root.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                parent = root
+            # Match automatic control parenting: DEF, original name, then ORG.
+            parent = resolve_generated_parent(edit_bones, source)
+            if parent is None:
+                parent = source if source in edit_bones else root
         else:
             parent = root
 

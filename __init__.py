@@ -8,6 +8,8 @@ rigify_info = {
 
 
 def register():
+    from . import generation_defaults
+    generation_defaults.register()
     from . import gamify_menu, meta_rig_tools, rig_toggle, viewport_preview, weight_paint_memory
     rig_toggle.register()
     meta_rig_tools.register()
@@ -17,6 +19,8 @@ def register():
 
 
 def unregister():
+    from . import generation_defaults
+    generation_defaults.unregister()
     from . import gamify_menu, meta_rig_tools, rig_toggle, viewport_preview, weight_paint_memory
     weight_paint_memory.unregister()
     gamify_menu.unregister()
