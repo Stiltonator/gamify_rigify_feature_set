@@ -56,8 +56,8 @@ for sequence, widget, orientation, start, end in (
     for generation in range(2):
         assert 'FINISHED' in bpy.ops.pose.rigify_generate()
         target = meta.data.rigify_target_rig
-        stems = ('Chain.000', 'Chain.001', 'Chain.002.L')
-        controls = [target.pose.bones[name[:-2] + '.Tweak' + name[-2:] if name.endswith(('.L', '.R')) else name + '.Tweak'] for name in stems]
+        stems = ('Chain.000', 'Chain.001', 'Chain.002')
+        controls = [target.pose.bones[name + '.Tweak'] for name in stems]
         endpoints = [target.pose.bones[stems[0]], target.pose.bones[stems[-1]]]
         pivot = target.pose.bones['Chain.Pivot']
         backing = target.pose.bones['MCH-AUTO-Chain']
@@ -77,7 +77,9 @@ for sequence, widget, orientation, start, end in (
                 rest_y = deform.bone.matrix_local.to_3x3() @ Vector((0, 1, 0))
                 assert rest_y.dot(Vector((1, 0, 0))) > 0.999, (deform.name, tuple(rest_y))
         expected_start = 'root' if start is None else None if start == 'NONE' else start
-        expected_end = expected_start if end is None else None if end == 'NONE' else end
+        expected_end = 'root' if end is None else None if end == 'NONE' else end
+        assert backing.parent.name == 'root'
+        assert defs[0].parent.name == 'root'
         assert (endpoints[0].parent.name if endpoints[0].parent else None) == expected_start
         assert (endpoints[-1].parent.name if endpoints[-1].parent else None) == expected_end
         # Rest positions survive backing/pivot constraints, including a curved joint.
@@ -162,3 +164,98 @@ for count in (1, 3, 4):
     if count > 1:
         assert any((bone.matrix.translation - point).length > 0.1 for bone, point in zip(defs, before))
 print('CHAIN_BASIC_LENGTHS_OK')
+
+# Control overrides remain independent of DEF overrides, including regeneration.
+for sequence in (True, False):
+    for parent in ('ORG-Reference', 'NONE'):
+        meta = metarig(sequence=sequence, start='ORG-Reference', end='NONE')
+        params = meta.pose.bones['Chain'].rigify_parameters
+        params.gr_cb_override_def_parent = True
+        params.gr_cb_def_parent = parent
+        for generation in range(2):
+            assert 'FINISHED' in bpy.ops.pose.rigify_generate()
+            target = meta.data.rigify_target_rig
+            defs = [target.pose.bones[name] for name in ('DEF-Chain.000', 'DEF-Chain.001', 'DEF-Chain.002')]
+            expected = None if parent == 'NONE' else parent
+            for index, deform in enumerate(defs):
+                actual = deform.parent.name if deform.parent else None
+                assert actual == (defs[index - 1].name if sequence and index else expected)
+            assert target.pose.bones['Chain.000'].parent.name == 'ORG-Reference'
+            assert target.pose.bones['Chain.002'].parent is None
+            assert target.pose.bones['MCH-AUTO-Chain'].parent.name == 'root'
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.select_all(action='DESELECT')
+            meta.hide_set(False)
+            meta.select_set(True)
+            bpy.context.view_layer.objects.active = meta
+print('CHAIN_BASIC_DEF_OVERRIDE_OK')
+
+for parent in ('DoesNotExist', 'DEF-Chain.000'):
+    meta = metarig()
+    params = meta.pose.bones['Chain'].rigify_parameters
+    params.gr_cb_override_def_parent = True
+    params.gr_cb_def_parent = parent
+    try:
+        bpy.ops.pose.rigify_generate()
+    except RuntimeError as exc:
+        assert ('not found' if parent == 'DoesNotExist' else 'cycle') in str(exc)
+    else:
+        raise AssertionError('Invalid DEF parent accepted: ' + parent)
+print('CHAIN_BASIC_INVALID_DEF_PARENTS_OK')
+
+# Point naming is sequential and independent of world X or armature transforms.
+for label in ('Scarf', 'Scarf.L', 'Ribbon.007'):
+    meta = metarig()
+    bpy.ops.object.mode_set(mode='EDIT')
+    meta.data.edit_bones['Chain'].name = label
+    for bone in meta.data.edit_bones:
+        if bone.name != 'Reference':
+            bone.head.x -= 0.1
+            bone.tail.x -= 0.1
+    bpy.ops.object.mode_set(mode='OBJECT')
+    meta.location.x = 2
+    assert 'FINISHED' in bpy.ops.pose.rigify_generate()
+    target = meta.data.rigify_target_rig
+    base = 'Ribbon' if label == 'Ribbon.007' else label
+    stems = [base + '.%03d' % index for index in range(3)]
+    for stem in stems:
+        assert 'DEF-' + stem in target.data.bones
+        assert stem + '.Tweak' in target.data.bones
+        assert 'MCH-INT-' + stem in target.data.bones
+    assert stems[0] in target.data.bones and stems[-1] in target.data.bones
+    assert not any(bone.name.endswith(('.L', '.R')) for bone in target.data.bones
+                   if bone.name.startswith(('DEF-', 'MCH-INT-')))
+print('CHAIN_BASIC_SEQUENTIAL_NAMES_OK')
+
+# Independent visual roles survive regeneration and pivot-only widget changes.
+meta = metarig()
+params = meta.pose.bones['Chain'].rigify_parameters
+params.gr_cb_main_palette = 'THEME01'
+params.gr_cb_pivot_palette = 'THEME04'
+params.gr_cb_tweak_palette = 'THEME03'
+params.gr_cb_pivot_widget = 'cube'
+for generation in range(2):
+    assert 'FINISHED' in bpy.ops.pose.rigify_generate()
+    target = meta.data.rigify_target_rig
+    for name, palette, widget in (
+            ('Chain.000', 'THEME01', 'circle'), ('Chain.002', 'THEME01', 'circle'),
+            ('Chain.Pivot', 'THEME04', 'cube' if generation == 0 else 'arrow'),
+            ('Chain.001.Tweak', 'THEME03', 'sphere')):
+        bone = target.pose.bones[name]
+        assert bone.color.palette == palette
+        assert bone.bone.color.palette == palette
+        assert bone.custom_shape['gr_cb_widget_type'] == widget
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.ops.object.select_all(action='DESELECT')
+    meta.hide_set(False)
+    meta.select_set(True)
+    bpy.context.view_layer.objects.active = meta
+    params.gr_cb_pivot_widget = 'arrow'
+print('CHAIN_BASIC_GENERATED_VISUALS_OK')
+
+# Custom palette enums retain Blender's theme colour swatch icons.
+for name in ('gr_cb_main_palette', 'gr_cb_pivot_palette', 'gr_cb_tweak_palette'):
+    items = params.bl_rna.properties[name].enum_items
+    assert items['THEME01'].icon == 'COLORSET_01_VEC'
+    assert items['THEME20'].icon == 'COLORSET_20_VEC'
+print('CHAIN_BASIC_PALETTE_ICONS_OK')

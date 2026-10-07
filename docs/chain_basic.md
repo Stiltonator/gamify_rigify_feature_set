@@ -23,29 +23,42 @@ internal mechanism, not a deform bone. The original bones follow the tweaks.
 **Parent in Sequence** selects the DEF hierarchy: sequential, or all subsequent
 DEFs under the first DEF. Tweaks always use their MCH-INT parents.
 
-**Override Start Parent** attaches the start main control, backing and first DEF
-to the exact entered name. Otherwise automatic parenting prefers the metarig
-parent's DEF counterpart, then its original name, then root with a warning.
-Automatic parenting never chooses an ORG counterpart.
+**Override Start Parent** changes only the start main control's parent to the
+exact entered name. **Override End Parent** likewise changes only the end main
+control's parent. Neither changes DEF parenting, the backing's parent, or the
+other endpoint control's parent.
 
-**Override End Parent** attaches the end main control to the exact entered name.
-Without it, both endpoint main controls share the resolved start parent. The
-final DEF retains its chosen DEF hierarchy. Overrides accept `NONE` for no
-parent, and explicit ORG names are allowed. Missing targets and dependency
-cycles raise generation errors.
+**Override DEF Parent**, in the Start Point section, changes the first DEF's
+parent when **Parent in Sequence** is enabled; subsequent DEFs retain sequential
+parenting. With sequence disabled, it parents every DEF directly to the entered
+parent. Without a DEF override, the first DEF uses automatic parenting and the
+remaining DEFs follow the chosen sequential/first-DEF hierarchy.
+
+Automatic parenting prefers the metarig parent's DEF counterpart, then its
+original name, then root with a warning. It never chooses an ORG counterpart.
+All overrides accept `NONE` for no parent, and explicit ORG names are allowed.
+Missing targets and dependency cycles raise generation errors. DEF bones still
+follow their tweaks when controls move; these settings change the parent links.
 
 **Override Bone Orientation** sets the endpoint controls, tweaks and DEF axes
 from the reference metarig bone. Otherwise these use their original segment
 axes, averaged at intersections. Backing, pivot and interior frames keep their
 common chain frame so pivot blending remains consistent.
 
-Main and tweak widgets have separate shape choices and sizes. **Shape Scale**
+The collapsible **Generated Visuals** section sits below **Override Bone
+Orientation**. Main controls, pivot and tweaks have separate palette dropdowns
+using Blender's default/theme palettes, and independent widget choices. Existing
+Rigify collection color sets take priority when assigned. Pivot size uses the
+main shape size; tweaks have a separate size. **Shape Scale**
 defaults to 0.1; main size to 3; tweak size to 1. Scale multiplies each size.
 Sizes have a 0.01–10 soft slider and allow manual values up to 100. Widgets are
 independent of bone length and replaced when their shape changes on regeneration.
 
-Names derive from the source metarig name: `Chain.000`, `Chain.001.Tweak.L`,
-and `DEF-Chain.001.L`, for example. Points on world X=0 omit the side suffix.
+Names use the first source metarig name with sequential point numbers:
+`Chain.000`, `Chain.001.Tweak`, and `DEF-Chain.001`, for example. An existing
+trailing three-digit number is replaced by the new sequence. No side suffixes
+are inferred from position, removed, or relocated; text such as `.L` already in
+the source name is retained as part of the base (`Scarf.L.000`).
 
 `tests/blender_chain_basic.py` checks generation and regeneration in Blender,
 rest positions, pivot and endpoint motion, hierarchy modes, orientation, widgets,
