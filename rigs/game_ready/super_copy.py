@@ -1,6 +1,7 @@
 """GameReady super copy based on Rigify's basic.super_copy."""
 
 import warnings
+import inspect
 
 from bpy.props import BoolProperty, FloatVectorProperty, StringProperty
 
@@ -8,6 +9,7 @@ from rigify.base_rig import stage
 from rigify.rigs.basic.super_copy import Rig as NativeSuperCopyRig
 from rigify.utils import make_deformer_name, strip_org
 from rigify.utils.widgets import layout_widget_dropdown
+from rigify.utils import widgets as rigify_widgets
 from ...viewport_preview import tag_view3d_redraw
 from .def_parent import DefParentMixin, resolve_generated_parent
 from .custom_shapes import copy_custom_shape
@@ -245,7 +247,26 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
         # Widget disabled preserves the metarig custom shape, if one exists.
         if self.make_control:
             if self.make_widget:
-                super().generate_widgets()
+                widget_type = self.params.super_copy_widget_type or 'circle'
+                old = self.generator.old_widget_table.get(self.bones.ctrl)
+                force = old is None or old.get('gamify_super_copy_widget_type') != widget_type
+                # Do not let a metarig custom shape seed a generated widget mesh.
+                self.get_bone(self.bones.ctrl).custom_shape = None
+                try:
+                    builder, _, defaults = rigify_widgets._registered_widgets[widget_type]
+                except KeyError:
+                    self.raise_error("Unknown widget name: {}", widget_type)
+                # create_registered_widget filters widget_force_new out of its
+                # arguments. Pass it directly to supported widget wrappers.
+                signature = inspect.signature(builder, follow_wrapped=False)
+                if 'widget_force_new' in signature.parameters:
+                    builder(self.obj, self.bones.ctrl, widget_force_new=force, **defaults)
+                else:
+                    # Third-party callbacks retain their native calling convention.
+                    rigify_widgets.create_registered_widget(self.obj, self.bones.ctrl, widget_type)
+                widget = self.generator.new_widget_table.get(self.bones.ctrl)
+                if widget:
+                    widget['gamify_super_copy_widget_type'] = widget_type
             else:
                 source = self.generator.metarig.pose.bones[strip_org(self.bones.org)]
                 copy_custom_shape(self, source, self.bones.ctrl)

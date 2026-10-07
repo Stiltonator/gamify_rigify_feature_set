@@ -116,3 +116,31 @@ for make_control, make_deform, override, expected in (
         meta.select_set(True)
         bpy.context.view_layer.objects.active = meta
 print('SUPER_COPY_CONTROL_PARENT_PRIORITY_OK')
+
+# Vanilla -> Gamify must rebuild the widget to match the displayed selection.
+params = meta.pose.bones['Mouth'].rigify_parameters
+meta.pose.bones['Mouth'].rigify_type = 'basic.super_copy'
+params.make_widget = True
+params.super_copy_widget_type = 'cube'
+meta.pose.bones['Mouth'].custom_shape = None
+bpy.ops.object.mode_set(mode='OBJECT')
+bpy.ops.object.select_all(action='DESELECT')
+meta.hide_set(False)
+meta.select_set(True)
+bpy.context.view_layer.objects.active = meta
+meta.data.rigify_force_widget_update = True
+assert 'FINISHED' in bpy.ops.pose.rigify_generate()
+old = meta.data.rigify_target_rig.pose.bones['Mouth'].custom_shape
+assert len(old.data.vertices) == 8
+bpy.ops.object.mode_set(mode='OBJECT')
+bpy.ops.object.select_all(action='DESELECT')
+meta.select_set(True)
+bpy.context.view_layer.objects.active = meta
+meta.data.rigify_force_widget_update = False
+meta.pose.bones['Mouth'].rigify_type = 'game_ready.super_copy'
+params.gr_sc_make_widget = True
+params.super_copy_widget_type = 'circle'
+assert 'FINISHED' in bpy.ops.pose.rigify_generate()
+new = meta.data.rigify_target_rig.pose.bones['Mouth'].custom_shape
+assert len(new.data.vertices) != 8, 'Gamify circle reused vanilla cube geometry'
+print('SUPER_COPY_VANILLA_SWITCH_OK')

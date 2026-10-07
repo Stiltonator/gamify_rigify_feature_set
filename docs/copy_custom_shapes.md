@@ -7,6 +7,12 @@ custom-shape transform settings. Without a source shape, the control uses
 ordinary bone display. Enabling Widget still creates the selected widget and
 uses Gamify's widget offset/scale settings.
 
+When Widget is enabled, Gamify marks generated widgets with their selected
+type. A previous vanilla widget or a widget of another type is rebuilt rather
+than reused with stale geometry. Matching Gamify widgets can still be reused.
+The widget-type dropdown remains shared with native super-copy, so its selection
+can persist when switching rig types; Gamify's Widget checkbox is separate.
+
 Automatic `super_copy` control parenting prefers the metarig parent's generated
 DEF bone, then the bone with its original metarig name, then native ORG parenting.
 An enabled control **Override Parent** bypasses this preference and uses the
