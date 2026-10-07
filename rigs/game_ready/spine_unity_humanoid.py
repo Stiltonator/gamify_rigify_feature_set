@@ -16,7 +16,8 @@ class Rig(DefParentMixin, NativeBasicSpineRig):
     parent_name_param = 'gr_spine_parent'
 
     def rig_deform_bone(self, i, deform, tweak, next_tweak):
-        self.make_constraint(deform, 'COPY_TRANSFORMS', tweak)
+        self.make_constraint(deform, 'COPY_LOCATION', tweak)
+        self.make_constraint(deform, 'COPY_ROTATION', tweak)
         if next_tweak:
             self.make_constraint(deform, 'DAMPED_TRACK', next_tweak, track_axis='TRACK_Y')
 
