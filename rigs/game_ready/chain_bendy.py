@@ -7,6 +7,7 @@ created at the chain joints and at evenly spaced samples inside each B-Bone.
 import bpy
 import warnings
 import re
+from .bone_colors import copy_metarig_color
 from mathutils import Vector
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 
@@ -419,6 +420,7 @@ class Rig(BaseRig):
 
     @stage.generate_bones
     def generate_bendy_bones(self):
+        self._color_sources = {}
         self._prepare_mirror_groups()
         edit_bones = self.obj.data.edit_bones
         bbone_drivers = []
@@ -485,6 +487,7 @@ class Rig(BaseRig):
                 if not group:
                     self._place_bone(control, point, direction, point_length, roll_axis)
                 controls.append(control)
+                self._color_sources[control] = source_name
             self._place_bone(tangent, point, direction, point_length, roll_axis)
             point_controls.append(control)
             tangent_bones.append(tangent)
@@ -586,6 +589,8 @@ class Rig(BaseRig):
             sample_names.append(int_name)
             tweak_names.append(tweak_name)
             deform_names.append(def_name)
+            self._color_sources[tweak_name] = source_name
+            self._color_sources[def_name] = source_name
             def_chain.append(def_name)
 
         if 'end' in self._mirror_groups:
@@ -838,6 +843,20 @@ class Rig(BaseRig):
             self.set_bone_parent(deform, parent, use_connect=False)
             if parent is None:
                 self.generator.disable_auto_parent(deform)
+
+    @stage.configure_bones
+    def configure_metarig_colors(self):
+        for target, source in self._color_sources.items():
+            group = next((group for group in self._mirror_groups.values()
+                          if group['control'] == target), None)
+            if group:
+                source = group['style_rig'].org_chain[group['index']]
+            copy_metarig_color(self, strip_org(source), target)
+        for group in self._mirror_groups.values():
+            if group.get('sample_owner') is self:
+                source = strip_org(group['sample_style'].org_chain[group['index']])
+                for target in group['sample'][1:]:
+                    copy_metarig_color(self, source, target)
 
     @stage.configure_bones
     def configure_bendy_chain(self):

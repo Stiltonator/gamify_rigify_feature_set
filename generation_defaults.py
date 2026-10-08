@@ -22,6 +22,8 @@ def register():
         if _enabled:
             rig = metarig.data.rigify_target_rig
             if rig and rig.type == 'ARMATURE':
+                from .rigs.game_ready.bone_colors import restore_metarig_colors
+                restore_metarig_colors(metarig, rig)
                 root = rig.pose.bones.get('root')
                 if root:
                     root.lock_scale = (True, True, True)

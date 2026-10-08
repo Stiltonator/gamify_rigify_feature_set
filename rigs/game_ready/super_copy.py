@@ -13,6 +13,7 @@ from rigify.utils import widgets as rigify_widgets
 from ...viewport_preview import tag_view3d_redraw
 from .def_parent import DefParentMixin, resolve_generated_parent
 from .custom_shapes import copy_custom_shape
+from .bone_colors import copy_metarig_color
 
 
 class Rig(DefParentMixin, NativeSuperCopyRig):
@@ -217,6 +218,11 @@ class Rig(DefParentMixin, NativeSuperCopyRig):
 
     @stage.configure_bones
     def configure_game_ready_control(self):
+        source = strip_org(self.bones.org)
+        for target in (self.bones.ctrl if self.make_control else None,
+                       self.bones.deform if self.make_deform else None):
+            if target:
+                copy_metarig_color(self, source, target)
         if self.make_control and self.make_widget:
             control = self.get_bone(self.bones.ctrl)
             control.custom_shape_translation = self.gr_widget_offset
