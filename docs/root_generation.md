@@ -1,6 +1,6 @@
 # Generated root defaults
 
-The Gamify menu's **Root Bone Z Forward** option is enabled by default and saved
+The Gamify menu's **Root Bone Z Forward** option is disabled by default and saved
 with the scene. Immediately after Rigify creates or selects its root bone,
 Gamify orients its local Y axis along Blender +Z (up), and its local +Z along
 Blender -Y (forward), in armature space. Root position and length are preserved.

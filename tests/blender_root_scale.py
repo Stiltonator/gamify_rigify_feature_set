@@ -12,6 +12,9 @@ from gamify import generation_defaults
 
 original = generate.generate_rig
 original_create_root = generate.Generator._Generator__create_root_bone
+# Isolate this checkout from a separately installed Gamify version's default.
+if hasattr(bpy.types.Scene, 'gamify_root_z_forward'):
+    del bpy.types.Scene.gamify_root_z_forward
 generation_defaults.register()
 generation_defaults.register()
 bpy.ops.object.armature_add()
@@ -20,7 +23,7 @@ meta.pose.bones[0].rigify_type = 'basic.super_copy'
 collection = meta.data.collections.new('Controls')
 collection.rigify_ui_row = 1
 collection.assign(meta.data.bones[0])
-assert bpy.context.scene.gamify_root_z_forward
+assert not bpy.context.scene.gamify_root_z_forward
 for index, enabled in enumerate((True, True, False, True)):
     bpy.context.scene.gamify_root_z_forward = enabled
     assert 'FINISHED' in bpy.ops.pose.rigify_generate()

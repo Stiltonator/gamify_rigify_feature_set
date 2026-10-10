@@ -40,7 +40,7 @@ def register():
     _enabled = True
     if not hasattr(bpy.types.Scene, 'gamify_root_z_forward'):
         bpy.types.Scene.gamify_root_z_forward = bpy.props.BoolProperty(
-            name='Root Bone Z Forward', default=True,
+            name='Root Bone Z Forward', default=False,
             description='Orient the generated root immediately after creation: local Y up (Blender +Z), local Z forward (Blender -Y)')
     _register_root_orientation(generate)
     if _wrapped_generate is not None:
