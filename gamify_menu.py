@@ -25,7 +25,10 @@ class VIEW3D_MT_gamify_menu(bpy.types.Menu):
         )
         layout.prop(context.scene, 'gamify_show_mch_bones', text="Show MCH Bones")
         layout.prop(context.scene, 'gamify_show_def_bones', text="Show DEF Bones")
+
+        layout.separator()
         layout.prop(context.scene, 'gamify_root_z_forward', text="Root Bone Z Forward")
+        layout.prop(context.scene, 'gamify_root_flip_y', text="Root Flip Y")
 
         if obj and obj.type == 'ARMATURE' and obj.mode == 'POSE':
             layout.separator()
