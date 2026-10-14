@@ -57,8 +57,8 @@ for sequence, widget, orientation, start, end in (
         assert 'FINISHED' in bpy.ops.pose.rigify_generate()
         target = meta.data.rigify_target_rig
         stems = ('Chain.000', 'Chain.001', 'Chain.002')
-        controls = [target.pose.bones[name + '.Tweak'] for name in stems]
-        endpoints = [target.pose.bones[stems[0]], target.pose.bones[stems[-1]]]
+        controls = [target.pose.bones['Chain.Tweak.%03d' % index] for index in range(3)]
+        endpoints = [target.pose.bones['Chain'], target.pose.bones[stems[-1]]]
         pivot = target.pose.bones['Chain.Pivot']
         backing = target.pose.bones['MCH-AUTO-Chain']
         defs = [target.pose.bones['DEF-' + name] for name in stems]
@@ -107,7 +107,7 @@ for sequence, widget, orientation, start, end in (
         bpy.context.view_layer.objects.active = meta
     print('CHAIN_BASIC_OK', sequence, widget, orientation, start, end)
 
-for missing in ('DoesNotExist', 'Chain.000'):
+for missing in ('DoesNotExist', 'Chain'):
     meta = metarig(start=missing)
     try:
         bpy.ops.pose.rigify_generate()
@@ -128,7 +128,7 @@ for use_deform in (True, False):
     assert 'FINISHED' in bpy.ops.pose.rigify_generate()
     target = meta.data.rigify_target_rig
     expected = 'DEF-Reference' if use_deform else 'Reference'
-    assert target.data.bones['Chain.000'].parent.name == expected
+    assert target.data.bones['Chain'].parent.name == expected
     assert target.data.bones['DEF-Chain.000'].parent.name == expected
 print('CHAIN_BASIC_AUTOMATIC_PARENT_OK')
 
@@ -180,7 +180,7 @@ for sequence in (True, False):
             for index, deform in enumerate(defs):
                 actual = deform.parent.name if deform.parent else None
                 assert actual == (defs[index - 1].name if sequence and index else expected)
-            assert target.pose.bones['Chain.000'].parent.name == 'ORG-Reference'
+            assert target.pose.bones['Chain'].parent.name == 'ORG-Reference'
             assert target.pose.bones['Chain.002'].parent is None
             assert target.pose.bones['MCH-AUTO-Chain'].parent.name == 'root'
             bpy.ops.object.mode_set(mode='OBJECT')
@@ -204,7 +204,7 @@ for parent in ('DoesNotExist', 'DEF-Chain.000'):
 print('CHAIN_BASIC_INVALID_DEF_PARENTS_OK')
 
 # Point naming is sequential and independent of world X or armature transforms.
-for label in ('Scarf', 'Scarf.L', 'Ribbon.007'):
+for label in ('Scarf', 'Scarf.L', 'Scarf.R', 'Ribbon.007', 'Ribbon.007.L'):
     meta = metarig()
     bpy.ops.object.mode_set(mode='EDIT')
     meta.data.edit_bones['Chain'].name = label
@@ -216,15 +216,15 @@ for label in ('Scarf', 'Scarf.L', 'Ribbon.007'):
     meta.location.x = 2
     assert 'FINISHED' in bpy.ops.pose.rigify_generate()
     target = meta.data.rigify_target_rig
-    base = 'Ribbon' if label == 'Ribbon.007' else label
-    stems = [base + '.%03d' % index for index in range(3)]
-    for stem in stems:
+    side = label[-2:] if label.endswith(('.L', '.R')) else ''
+    base = 'Ribbon' if label.startswith('Ribbon') else 'Scarf'
+    stems = [base + '.%03d' % index + side for index in range(3)]
+    for index, stem in enumerate(stems):
         assert 'DEF-' + stem in target.data.bones
-        assert stem + '.Tweak' in target.data.bones
+        assert base + '.Tweak.%03d' % index + side in target.data.bones
         assert 'MCH-INT-' + stem in target.data.bones
-    assert stems[0] in target.data.bones and stems[-1] in target.data.bones
-    assert not any(bone.name.endswith(('.L', '.R')) for bone in target.data.bones
-                   if bone.name.startswith(('DEF-', 'MCH-INT-')))
+    assert label in target.data.bones and stems[-1] in target.data.bones
+    assert base + '.Pivot' + side in target.data.bones
 print('CHAIN_BASIC_SEQUENTIAL_NAMES_OK')
 
 # Independent visual roles survive regeneration and pivot-only widget changes.
@@ -238,9 +238,9 @@ for generation in range(2):
     assert 'FINISHED' in bpy.ops.pose.rigify_generate()
     target = meta.data.rigify_target_rig
     for name, palette, widget in (
-            ('Chain.000', 'THEME01', 'circle'), ('Chain.002', 'THEME01', 'circle'),
+            ('Chain', 'THEME01', 'circle'), ('Chain.002', 'THEME01', 'circle'),
             ('Chain.Pivot', 'THEME04', 'cube' if generation == 0 else 'arrow'),
-            ('Chain.001.Tweak', 'THEME03', 'sphere')):
+            ('Chain.Tweak.001', 'THEME03', 'sphere')):
         bone = target.pose.bones[name]
         assert bone.color.palette == palette
         assert bone.bone.color.palette == palette

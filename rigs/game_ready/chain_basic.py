@@ -65,15 +65,25 @@ class Rig(BaseRig):
             return direction.normalized(), roll.normalized()
         return current.y_axis.normalized(), current.x_axis.normalized()
 
+    def _name_parts(self):
+        label = strip_org(self.org_chain[0])
+        match = re.search(r'\.[LRlr]$', label)
+        side = match.group() if match else ''
+        base = label[:-len(side)] if side else label
+        return re.sub(r'\.\d{3}$', '', base), side
+
+    @staticmethod
+    def _tweak_name(name):
+        return re.sub(r'(\.\d{3}(?:\.[LRlr])?)$', r'.Tweak\1', name)
+
     def _point_name(self, number):
-        # Keep the source name as written, stripping only an existing sequence number.
-        base = re.sub(r'\.\d{3}$', '', strip_org(self.org_chain[0]))
+        base, side = self._name_parts()
         bones = self.obj.data.edit_bones
         while True:
-            name = f'{base}.{number:03d}'
+            name = f'{base}.{number:03d}{side}'
             if all(candidate not in bones for candidate in
-                   (name, 'DEF-' + name, name + '.Tweak', 'MCH-INT-' + name)):
-                return name
+                   (name, 'DEF-' + name, self._tweak_name(name), 'MCH-INT-' + name)):
+                return name, number
             number += 1
 
     @stage.generate_bones
@@ -85,9 +95,10 @@ class Rig(BaseRig):
             source = self.org_chain[min(index, len(self.org_chain) - 1)]
             point = (bones[source].tail if index == len(self.org_chain) else bones[source].head).copy()
             direction, roll = self._orientation(index)
-            name = self._point_name(next_number)
-            next_number = int(name.rsplit('.', 1)[1]) + 1
-            control = self.copy_bone(source, name)
+            name, number = self._point_name(next_number)
+            next_number = number + 1
+            control_name = strip_org(self.org_chain[0]) if index == 0 else name
+            control = self.copy_bone(source, control_name)
             deform = self.copy_bone(source, 'DEF-' + name)
             for target in (control, deform):
                 bone = bones[target]
@@ -99,7 +110,7 @@ class Rig(BaseRig):
                 bone.bbone_segments = 1
                 bone.use_deform = target == deform
             # Endpoint controls drive the backing; interior point controls are tweaks.
-            tweak = self.copy_bone(control, control + '.Tweak')
+            tweak = self.copy_bone(control, self._tweak_name(name))
             intermediate = self.copy_bone(control, 'MCH-INT-' + name)
             tweaks.append(tweak)
             intermediates.append(intermediate)
@@ -120,8 +131,8 @@ class Rig(BaseRig):
         middle = len(self.org_chain) // 2
         source = bones[self.org_chain[middle]]
         location = source.head + source.vector * (0.5 if len(self.org_chain) % 2 else 0.0)
-        label = strip_org(self.org_chain[0])
-        pivot_name = label + '.Pivot'
+        base, side = self._name_parts()
+        pivot_name = base + '.Pivot' + side
         self.pivot = self.copy_bone(self.backing, pivot_name)
         bones[self.pivot].head = location
         bones[self.pivot].tail = location + direction.normalized() * direction.length * 0.25

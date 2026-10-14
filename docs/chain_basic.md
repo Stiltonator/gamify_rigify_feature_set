@@ -54,11 +54,13 @@ defaults to 0.1; main size to 3; tweak size to 1. Scale multiplies each size.
 Sizes have a 0.01–10 soft slider and allow manual values up to 100. Widgets are
 independent of bone length and replaced when their shape changes on regeneration.
 
-Names use the first source metarig name with sequential point numbers:
-`Chain.000`, `Chain.001.Tweak`, and `DEF-Chain.001`, for example. An existing
-trailing three-digit number is replaced by the new sequence. No side suffixes
-are inferred from position, removed, or relocated; text such as `.L` already in
-the source name is retained as part of the base (`Scarf.L.000`).
+The first main control retains the exact first source metarig name, such as
+`Eyelid.L`. Other points use sequential numbers with an existing `.L` or `.R`
+suffix kept last: `Eyelid.002.L`, `Eyelid.Tweak.002.L`, and `DEF-Eyelid.002.L`.
+The pivot is `Eyelid.Pivot.L`. Start tweaks and DEFs retain point number `000`.
+Existing trailing three-digit numbers are replaced for generated point names;
+the first main control retains its original number. No side is inferred from
+position, and unsided names remain unsided.
 
 `tests/blender_chain_basic.py` checks generation and regeneration in Blender,
 rest positions, pivot and endpoint motion, hierarchy modes, orientation, widgets,
