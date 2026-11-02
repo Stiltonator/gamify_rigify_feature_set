@@ -958,21 +958,12 @@ class Rig(BaseRig):
             if control is not None:
                 self.make_constraint(tangent, 'COPY_TRANSFORMS', control)
 
-        for intermediary, targets, (driver, head_tail) in zip(
+        for intermediary, (driver, head_tail) in zip(
             self.bones.mch.intermediary,
-            self._intermediary_targets,
             self._intermediary_curve_targets,
         ):
-            pose_bone = self.obj.pose.bones[intermediary]
-            constraint = pose_bone.constraints.new('ARMATURE')
-            constraint.name = 'Follow Nearest B-Bone'
-            constraint.use_current_location = True
-            for target_name, weight in targets:
-                target = constraint.targets.new()
-                target.target = self.obj
-                target.subtarget = target_name
-                target.weight = weight
-
+            # Follow the curve without an Armature constraint: its blended
+            # orientation can misalign samples when the root is reoriented.
             curve_location = self.make_constraint(
                 intermediary,
                 'COPY_LOCATION',

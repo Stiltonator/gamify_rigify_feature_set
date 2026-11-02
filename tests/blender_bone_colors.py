@@ -46,8 +46,18 @@ for name in ('super_copy', 'chain_bendy'):
         source.color.custom.select = (0.4, 0.5, 0.6)
         source.color.custom.active = (0.7, 0.8, 0.9)
     for generation in range(2):
+        bpy.context.scene.gamify_root_z_forward = bool(generation)
         assert 'FINISHED' in bpy.ops.pose.rigify_generate()
         target = meta.data.rigify_target_rig
+        if name == 'chain_bendy':
+            intermediaries = [bone for bone in target.pose.bones
+                             if bone.name.startswith('MCH-INT-')]
+            assert intermediaries
+            for bone in intermediaries:
+                assert not any(c.type == 'ARMATURE' for c in bone.constraints)
+                assert any(c.name == 'Follow B-Bone Curve' and c.type == 'COPY_LOCATION'
+                           for c in bone.constraints)
+                assert any(c.type == 'COPY_SCALE' for c in bone.constraints)
         copied = [bone for bone in target.pose.bones if 'gamify_metarig_color_source' in bone]
         assert copied
         for bone in copied:
