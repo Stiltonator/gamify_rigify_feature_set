@@ -11,7 +11,7 @@ bpy.ops.preferences.addon_enable(module='rigify')
 import rigify
 from rigify import rig_lists
 from gamify import generation_defaults
-from gamify.rigs.game_ready import chain_bendy
+from gamify.rigs.game_ready import chain_bendy, chain_basic
 
 for module in list(sys.modules.values()):
     if (module is not None and module is not generation_defaults
@@ -20,6 +20,7 @@ for module in list(sys.modules.values()):
         module.unregister()
 generation_defaults.register()
 rig_lists.rigs['game_ready.chain_bendy'] = {'module': chain_bendy, 'feature_set': 'rigify'}
+rig_lists.rigs['game_ready.chain_basic'] = {'module': chain_basic, 'feature_set': 'rigify'}
 rigify.register_rig_parameters()
 meta = bpy.data.objects['RigChan - METARIG']
 rig = meta.data.rigify_target_rig
@@ -28,6 +29,10 @@ settings = [(bone.rigify_parameters,
              bone.rigify_parameters.gr_chain_bendy_override_orientation,
              bone.rigify_parameters.gr_chain_bendy_orient_bone)
             for bone in meta.pose.bones if bone.rigify_type == 'game_ready.chain_bendy']
+bpy.context.scene.frame_set(0)
+original_eyes = {bone.name: (rig.matrix_world @ bone.matrix).copy()
+                 for bone in rig.pose.bones
+                 if bone.name.startswith(('Eyelid', 'DEF-Eyelid', 'ORG-EyelashStart'))}
 
 
 def frames(rig):
@@ -55,9 +60,20 @@ for generation in range(4):
     bpy.context.view_layer.objects.active = meta
     assert 'FINISHED' in bpy.ops.pose.rigify_generate()
     rig = meta.data.rigify_target_rig
+    rig.data.pose_position = 'POSE'
     assert rig.animation_data.nla_tracks[0].strips[0].action == action
     bpy.context.scene.frame_set(0)
     bpy.context.view_layer.update()
+    for name, expected in original_eyes.items():
+        actual = rig.matrix_world @ rig.pose.bones[name].matrix
+        assert max(abs(actual[r][c] - expected[r][c]) for r in range(4)
+                   for c in range(4)) < 0.0001, ('eyelid regression', name)
+    for bone in rig.pose.bones:
+        if bone.name.startswith('ORG-Eyelid'):
+            assert not bone.bone.use_connect
+            target = rig.pose.bones[bone.constraints[0].subtarget]
+            assert max(abs(bone.matrix[r][c] - target.matrix[r][c])
+                       for r in range(4) for c in range(4)) < 0.0001, bone.name
     max_offset = 0
     for bone in rig.pose.bones:
         if bone.name.startswith('MCH-INT-Mouth'):
@@ -68,6 +84,8 @@ for generation in range(4):
     print('MOUTH_MAX_INITIAL_ROTATION_OFFSET_DEGREES', max_offset)
     for bone in rig.pose.bones:
         if bone.name.startswith('DEF-Mouth'):
+            assert (bone.head - bone.bone.head_local).length < 1e-6, (
+                bone.name, (bone.head - bone.bone.head_local).length)
             assert bone.matrix.to_quaternion().rotation_difference(
                 bone.bone.matrix_local.to_quaternion()).angle < 0.001, bone.name
             if generation == 2:

@@ -64,6 +64,7 @@ for name in ('super_copy', 'chain_bendy'):
                 assert any(c.type == 'COPY_SCALE' for c in sampler.constraints)
                 assert bone.matrix.to_quaternion().rotation_difference(
                     bone.bone.matrix_local.to_quaternion()).angle < 0.001
+                assert (bone.head - bone.bone.head_local).length < 1e-6
             # Keep a nonzero animator offset while rotating the entire curved
             # chain. Every sample frame and its tweak/DEF must turn together.
             tweak = next(b for b in target.pose.bones

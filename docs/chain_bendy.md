@@ -3,8 +3,11 @@
 Independent MCH-INT samples follow dedicated MCH-CURVE sampling parents, which
 use Copy Transforms with B-Bone shape sampling. Neither uses an Armature
 constraint. At generation finish, sampling-parent rest axes are calibrated to
-the neutral curve frames, preserving the authored INT/tweak/DEF rest axes
-instead of imposing the curve's initial roll on them. Tweak bones retain their
+the neutral curve frames. Sampling parents and their INT/tweak/DEF samples are
+placed on the neutral curve, so DEF rest heads match their evaluated neutral
+positions rather than the original straight segments. Authored rest axes and
+bone lengths are preserved, including orientation overrides, instead of imposing
+the curve's initial roll on them. Tweak bones retain their
 local animator offsets as the chain turns. Curve drivers inherit their start
 tangent's frame to avoid the fixed-parent Stretch To roll flip during root half
 turns. At a mirror seam, both Y and X reverse across opposing tangents, keeping

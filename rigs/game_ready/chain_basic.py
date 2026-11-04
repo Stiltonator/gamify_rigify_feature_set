@@ -210,6 +210,11 @@ class Rig(BaseRig):
             dependencies = dict(dependency_graph, **{self.backing: endpoint})
             self._validate_parents(dependencies)
         self._validate_parents(proposed)
+        # ORGs copy their tweak's world transform, including orientation
+        # overrides. Connected heads would instead stay at the parent's tail.
+        # Retain their parents/rest geometry and remove only that restriction.
+        for source in self.org_chain:
+            self.get_bone(source).use_connect = False
         for name, parent in proposed.items():
             self.set_bone_parent(name, parent, use_connect=False)
             self.get_bone(name).inherit_scale = ('FULL' if name in self.intermediates[1:-1] else 'NONE')

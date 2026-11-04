@@ -66,3 +66,8 @@ position, and unsided names remain unsided.
 rest positions, pivot and endpoint motion, hierarchy modes, orientation, widgets,
 parent overrides, invalid parents and automatic parent fallback. It runs in a
 separate factory-startup scene without saving files or preferences.
+
+Generated ORG bones retain their parents and rest geometry but are disconnected.
+Their Copy Transforms constraints can therefore place them at the corresponding
+tweaks and respect orientation overrides, without connected heads being forced
+to the previous ORG tail. This does not change control or DEF generation.

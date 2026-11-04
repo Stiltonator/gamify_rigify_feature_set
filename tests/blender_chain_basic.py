@@ -63,6 +63,11 @@ for sequence, widget, orientation, start, end in (
         backing = target.pose.bones['MCH-AUTO-Chain']
         defs = [target.pose.bones['DEF-' + name] for name in stems]
         assert len([bone for bone in target.data.bones if bone.name.startswith('DEF-')]) == 3
+        for source, tweak in zip(('ORG-Chain', 'ORG-Chain.001'), controls):
+            original = target.pose.bones[source]
+            assert not original.bone.use_connect
+            assert max(abs(original.matrix[r][c] - tweak.matrix[r][c])
+                       for r in range(4) for c in range(4)) < 1e-5
         for index, (control, deform) in enumerate(zip(controls, defs)):
             assert control.custom_shape is not None
             assert tuple(round(v, 5) for v in control.custom_shape_scale_xyz) == (0.2,) * 3

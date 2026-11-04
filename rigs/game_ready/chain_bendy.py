@@ -999,26 +999,33 @@ class Rig(BaseRig):
 
     @stage.finalize
     def finalize_curve_rest_frames(self):
-        """Keep authored INT rest axes while following changes in curve frames."""
+        """Match neutral curve positions while keeping authored sample axes."""
         if not self._curve_frames:
             return
         import bpy
         bpy.context.view_layer.update()
         evaluated = self.obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
-        rotations = {name: evaluated.pose.bones[name].matrix.to_quaternion()
-                     for name in self._curve_frames}
-        # Only the sampling parents are calibrated. INT/tweak/DEF rest matrices
-        # stay authored; their relative parent transform supplies the rest offset.
+        frames = {name: evaluated.pose.bones[name].matrix.copy()
+                  for name in self._curve_frames}
+        # Curve parents receive the neutral frame. Move the whole sample stack
+        # onto that curve point, retaining INT/tweak/DEF rest axes and lengths.
+        # Their relative parent rotations preserve orientation overrides.
         mode = self.obj.mode
         bpy.ops.object.mode_set(mode='EDIT')
         try:
-            for name, rotation in rotations.items():
+            for name, intermediary, tweak, deform in zip(
+                    self._curve_frames, self.bones.mch.intermediary,
+                    self.bones.ctrl.tweaks, self.bones.deform):
                 bone = self.obj.data.edit_bones[name]
-                head, length = bone.head.copy(), bone.length
-                matrix = rotation.to_matrix().to_4x4()
-                matrix.translation = head
+                neutral = frames[name]
+                offset = neutral.translation - bone.head
+                length = bone.length
+                matrix = neutral.to_quaternion().to_matrix().to_4x4()
+                matrix.translation = neutral.translation
                 bone.matrix = matrix
                 bone.length = length
+                for sample in (intermediary, tweak, deform):
+                    self.obj.data.edit_bones[sample].translate(offset)
         finally:
             bpy.ops.object.mode_set(mode=mode)
         bpy.context.view_layer.update()
