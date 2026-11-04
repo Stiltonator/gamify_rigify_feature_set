@@ -172,6 +172,14 @@ def pair(role='start', skip=(False, False), shift=(0, 0, 0)):
 
 
 class MirrorMergeTests(unittest.TestCase):
+    def test_mirrored_tangent_roll_axes_reverse_together(self):
+        rigs = pair()
+        self.generate(rigs)
+        a = rigs[0].get_bone(rigs[0].bones.mch.tangents[0])
+        b = rigs[1].get_bone(rigs[1].bones.mch.tangents[0])
+        self.assertLess(a.x_axis.dot(b.x_axis), -0.999)
+        self.assertLess(a.y_axis.dot(b.y_axis), -0.999)
+
     def test_default_parent_prefers_def_then_control_never_org(self):
         for available, expected in ((('Face', 'DEF-Face'), 'DEF-Face'),
                                     (('Face',), 'Face'), ((), 'root')):

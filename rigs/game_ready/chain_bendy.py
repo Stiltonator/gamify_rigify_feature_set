@@ -207,7 +207,9 @@ class Rig(BaseRig):
                 if direction.length < tolerance:
                     direction = sources[0].y_axis.copy()
                 direction.normalize()
-                roll = sources[0].x_axis.normalized() + sources[1].x_axis.normalized()
+                # Opposite tangent directions require opposite X axes to keep
+                # the same surface-facing Z axis on both sides of the seam.
+                roll = sources[0].x_axis.normalized() - sources[1].x_axis.normalized()
                 roll -= direction * roll.dot(direction)
                 if roll.length < tolerance:
                     roll = min((Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))),
@@ -480,7 +482,7 @@ class Rig(BaseRig):
             if group:
                 control = self._generate_merged_endpoint(group, source_name, point, point_length)
                 direction = group['direction'] if self is group['rigs'][0] else -group['direction']
-                roll_axis = group['roll']
+                roll_axis = group['roll'] if self is group['rigs'][0] else -group['roll']
             # Main controls and tangents always share the B-Bone chain orientation.
             # The orientation override applies only to tweaks and DEF samples.
             if control is not None and (not group or group['owner'] is self):
@@ -520,6 +522,7 @@ class Rig(BaseRig):
             pivot_bone.roll = 0.0
 
         sample_names = []
+        self._curve_frames = []
         tweak_names = []
         deform_names = []
         sample_specs = self._sample_specs()
@@ -562,6 +565,8 @@ class Rig(BaseRig):
                 self._bone_length(source_name) * 0.12,
                 roll_axis,
             )
+            frame = self.copy_bone(int_name, int_name.replace('MCH-INT-', 'MCH-CURVE-', 1))
+            self._curve_frames.append(frame)
             sample_stem = self._short_name(point, sample_index, ('sample',))
             tweak_name = self._tweak_name(sample_stem)
             # The tweak and its DEF must share one rest orientation, because the
@@ -651,6 +656,7 @@ class Rig(BaseRig):
         owned.update(self.bones.mch.tangents)
         owned.update(self.bones.mch.bbone_drivers)
         owned.update(self.bones.mch.intermediary)
+        owned.update(self._curve_frames)
         owned.update(self.bones.ctrl.tweaks)
         owned.update(self.bones.deform)
         owned.add(self.bones.mch.armature_pivot)
@@ -714,7 +720,8 @@ class Rig(BaseRig):
         self.rig_parent_bone = parent or root
 
         # Main controls attach to the selected chain parent. Tangent bones
-        # follow those controls; drivers and INT bones stay under the MCH pivot.
+        # follow those controls; curve drivers follow their start tangent frame,
+        # while INT bones sample the curve from under the fixed MCH pivot.
         # Each tweak is parented to its corresponding INT, while DEF parenting
         # is either sequential or flat under the selected chain parent.
         for control in self.bones.ctrl.joints:
@@ -806,8 +813,15 @@ class Rig(BaseRig):
         self.set_bone_parent(pivot, None, use_connect=False)
         self.generator.disable_auto_parent(pivot)
 
-        for name in self.bones.mch.bbone_drivers + self.bones.mch.intermediary:
-            self.set_bone_parent(name, pivot, use_connect=False)
+        # Give each curve driver a rotating reference frame. Stretch To under
+        # the fixed pivot can flip its roll at a half turn, even when its start
+        # and end positions follow the character correctly.
+        for driver, tangent in zip(self.bones.mch.bbone_drivers, self.bones.mch.tangents):
+            self.set_bone_parent(driver, tangent, use_connect=False)
+
+        for intermediary, frame in zip(self.bones.mch.intermediary, self._curve_frames):
+            self.set_bone_parent(frame, pivot, use_connect=False)
+            self.set_bone_parent(intermediary, frame, use_connect=False)
 
         parent_defs_in_sequence = self.params.gr_chain_bendy_parent_def_sequence
         shared_defs = {group['sample'][2] for group in self._mirror_groups.values() if group['sample']}
@@ -959,14 +973,15 @@ class Rig(BaseRig):
                 self.make_constraint(tangent, 'COPY_TRANSFORMS', control)
 
         for intermediary, (driver, head_tail) in zip(
-            self.bones.mch.intermediary,
+            self._curve_frames,
             self._intermediary_curve_targets,
         ):
-            # Follow the curve without an Armature constraint: its blended
-            # orientation can misalign samples when the root is reoriented.
+            # Sample the curve frame, not only its position. INT bones have a
+            # fixed pivot parent, so location alone leaves their rotation behind
+            # when the character turns. Child tweaks retain their local offsets.
             curve_location = self.make_constraint(
                 intermediary,
-                'COPY_LOCATION',
+                'COPY_TRANSFORMS',
                 driver,
                 head_tail=head_tail,
                 use_bbone_shape=True,
@@ -981,6 +996,32 @@ class Rig(BaseRig):
 
         for deform, tweak in zip(self.bones.deform, self.bones.ctrl.tweaks):
             self.make_constraint(deform, 'COPY_TRANSFORMS', tweak)
+
+    @stage.finalize
+    def finalize_curve_rest_frames(self):
+        """Keep authored INT rest axes while following changes in curve frames."""
+        if not self._curve_frames:
+            return
+        import bpy
+        bpy.context.view_layer.update()
+        evaluated = self.obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        rotations = {name: evaluated.pose.bones[name].matrix.to_quaternion()
+                     for name in self._curve_frames}
+        # Only the sampling parents are calibrated. INT/tweak/DEF rest matrices
+        # stay authored; their relative parent transform supplies the rest offset.
+        mode = self.obj.mode
+        bpy.ops.object.mode_set(mode='EDIT')
+        try:
+            for name, rotation in rotations.items():
+                bone = self.obj.data.edit_bones[name]
+                head, length = bone.head.copy(), bone.length
+                matrix = rotation.to_matrix().to_4x4()
+                matrix.translation = head
+                bone.matrix = matrix
+                bone.length = length
+        finally:
+            bpy.ops.object.mode_set(mode=mode)
+        bpy.context.view_layer.update()
 
     @stage.generate_widgets
     def generate_bendy_widgets(self):

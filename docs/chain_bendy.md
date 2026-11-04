@@ -1,5 +1,15 @@
 # Chain Bendy endpoint settings
 
+Independent MCH-INT samples follow dedicated MCH-CURVE sampling parents, which
+use Copy Transforms with B-Bone shape sampling. Neither uses an Armature
+constraint. At generation finish, sampling-parent rest axes are calibrated to
+the neutral curve frames, preserving the authored INT/tweak/DEF rest axes
+instead of imposing the curve's initial roll on them. Tweak bones retain their
+local animator offsets as the chain turns. Curve drivers inherit their start
+tangent's frame to avoid the fixed-parent Stretch To roll flip during root half
+turns. At a mirror seam, both Y and X reverse across opposing tangents, keeping
+the same surface-facing Z axis instead of cancelling the roll reference.
+
 **Shape Scale** multiplies both widget sizes and defaults to 0.1, with hard limits
 of 0.001–100. Main Shape Size defaults to 3; Tweak Shape Size defaults to 1.
 Both size sliders have soft limits of 0.01–10, and manual entry supports

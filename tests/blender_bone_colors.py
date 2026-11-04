@@ -4,6 +4,8 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import bpy
+from math import radians
+from mathutils import Matrix
 bpy.ops.preferences.addon_enable(module='rigify')
 import rigify
 from rigify import rig_lists
@@ -55,9 +57,48 @@ for name in ('super_copy', 'chain_bendy'):
             assert intermediaries
             for bone in intermediaries:
                 assert not any(c.type == 'ARMATURE' for c in bone.constraints)
-                assert any(c.name == 'Follow B-Bone Curve' and c.type == 'COPY_LOCATION'
-                           for c in bone.constraints)
-                assert any(c.type == 'COPY_SCALE' for c in bone.constraints)
+                sampler = bone.parent
+                assert sampler.name.startswith('MCH-CURVE-')
+                assert any(c.name == 'Follow B-Bone Curve' and c.type == 'COPY_TRANSFORMS'
+                           for c in sampler.constraints)
+                assert any(c.type == 'COPY_SCALE' for c in sampler.constraints)
+                assert bone.matrix.to_quaternion().rotation_difference(
+                    bone.bone.matrix_local.to_quaternion()).angle < 0.001
+            # Keep a nonzero animator offset while rotating the entire curved
+            # chain. Every sample frame and its tweak/DEF must turn together.
+            tweak = next(b for b in target.pose.bones
+                         if b.parent and b.parent.name == intermediaries[0].name)
+            tweak.location = (0.02, 0.03, -0.01)
+            tweak.rotation_euler = (0.1, 0.2, 0.3)
+            bpy.context.view_layer.update()
+            followed = intermediaries + [b for b in target.pose.bones
+                                        if 'gamify_metarig_color_source' in b]
+            baseline = {b.name: target.matrix_world @ b.matrix for b in followed}
+            def curve_frames():
+                evaluated = target.evaluated_get(bpy.context.evaluated_depsgraph_get())
+                return {(b.name, i): evaluated.matrix_world @ b.matrix @ b.bbone_segment_matrix(i)
+                        for b in evaluated.pose.bones if b.bone.bbone_segments > 1
+                        for i in range(b.bone.bbone_segments + 1)}
+            curve_baseline = curve_frames()
+            root = target.pose.bones['root']
+            original_root = root.matrix.copy()
+            for angle in (90, 179, 180, 181, 270, 360):
+                rotation = Matrix.Rotation(radians(angle), 4, 'Z')
+                root.matrix = target.matrix_world.inverted() @ rotation @ target.matrix_world @ original_root
+                bpy.context.view_layer.update()
+                for bone in followed:
+                    actual = target.matrix_world @ bone.matrix
+                    expected = rotation @ baseline[bone.name]
+                    assert max(abs(actual[r][c] - expected[r][c])
+                               for r in range(4) for c in range(4)) < 2e-4, (angle, bone.name)
+                for key, actual in curve_frames().items():
+                    expected = rotation @ curve_baseline[key]
+                    assert max(abs(actual[r][c] - expected[r][c])
+                               for r in range(4) for c in range(4)) < 2e-4, (angle, key)
+            root.matrix = original_root
+            tweak.location = (0, 0, 0)
+            tweak.rotation_euler = (0, 0, 0)
+            bpy.context.view_layer.update()
         copied = [bone for bone in target.pose.bones if 'gamify_metarig_color_source' in bone]
         assert copied
         for bone in copied:
